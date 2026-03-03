@@ -1,0 +1,10 @@
+project: insect_yellow
+
+approach:
+  name: rtdetr
+  model: rtdetr-resnet50
+  img_size: 640
+
+training:
+  epochs: 30
+  batch_size: 4
