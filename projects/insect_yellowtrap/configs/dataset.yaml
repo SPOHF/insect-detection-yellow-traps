@@ -1,0 +1,8 @@
+name: insect_yellowtrap
+format: coco
+root: src/cvcore/data/SPoHF.v9i.coco
+splits:
+  train: train/_annotations.coco.json
+  val: valid/_annotations.coco.json
+  test: test/_annotations.coco.json
+class_names: ["insect"]

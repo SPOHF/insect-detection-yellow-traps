@@ -1,0 +1,5 @@
+backend: pytorch
+model_name: fasterrcnn_resnet50_fpn
+num_classes: 1
+pretrained: true
+weights: null

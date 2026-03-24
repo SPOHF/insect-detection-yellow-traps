@@ -1,0 +1,5 @@
+weights: projects/insect_yellowtrap/runs/exp1/best.pt
+conf_thresh: 0.3
+nms_thresh: 0.5
+input: /path/to/images
+output: projects/insect_yellowtrap/runs/exp1/preds

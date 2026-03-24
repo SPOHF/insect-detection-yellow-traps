@@ -1,0 +1,2 @@
+weights: projects/insect_yellowtrap/runs/exp1/best.pt
+metrics: ["map", "count_mae"]
