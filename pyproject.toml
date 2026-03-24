@@ -1,0 +1,21 @@
+[project]
+name = "cv-project-template"
+version = "0.1.0"
+description = "Reusable CV template with modular datasets, models, training, and inference"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+  "typer>=0.12",
+  "pyyaml>=6.0",
+  "pillow>=10.0",
+  "opencv-python>=4.8",
+  "torch>=2.0",
+  "ultralytics>=8.0",
+]
+
+[project.scripts]
+cvcore = "cvcore.cli:app"
+insect = "cli:app"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

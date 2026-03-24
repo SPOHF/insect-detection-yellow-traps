@@ -1,0 +1,7 @@
+INFO:     Will watch for changes in these directories: ['/Users/louis.ferger-andrews/Desktop/insect_yellow_tape/insect-detection-yellow-traps/apps/backend']
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:     Started reloader process [29652] using WatchFiles
+INFO:     Started server process [29656]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     127.0.0.1:53050 - "GET /health HTTP/1.1" 200 OK

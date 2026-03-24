@@ -1,0 +1,6 @@
+project: insect_yellow
+
+approach:
+  name: classical_cv
+  threshold: 180
+  min_area: 20

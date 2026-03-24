@@ -1,0 +1,3 @@
+[console_scripts]
+cvcore = cvcore.cli:app
+insect = cli:app
