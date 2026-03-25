@@ -2,6 +2,78 @@
 
 End-to-end local platform for monitoring *Drosophila suzukii* on yellow sticky traps.
 
+## Instructions
+
+Use this quick sequence to set everything up from scratch.
+
+### 1) Prerequisites
+
+- Docker Desktop (or Docker Engine + Compose)
+- Python `3.11+`
+- Node.js `18+` (recommended `20+`)
+- npm
+
+### 2) Clone and open the project
+
+```bash
+git clone git@github.com:SPOHF/insect-detection-yellow-traps.git
+cd insect-detection-yellow-traps
+```
+
+### 3) Start databases
+
+```bash
+docker compose up -d postgres neo4j
+```
+
+### 4) Configure and start backend
+
+```bash
+cd apps/backend
+cp .env.example .env
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+./scripts/start.sh
+```
+
+Backend runs on: `http://localhost:8000`  
+API docs: `http://localhost:8000/docs`
+
+Default seeded admin:
+- Email: `admin@swd-monitoring.com`
+- Password: `Admin123ChangeMe`
+
+### 5) Configure and start frontend
+
+Open a second terminal:
+
+```bash
+cd apps/frontend
+cp .env.example .env
+npm install
+npm run dev
+```
+
+Frontend runs on: `http://localhost:5173`
+
+### 6) First-use flow in the app
+
+1. Log in
+2. Create/select a field
+3. Upload trap images
+4. Open Analytics and Exploratory Analysis
+
+### 7) Data safety (important)
+
+- Keep raw data in `data/raw/...`
+- Raw data is ignored by git (`data/raw/`, `data/**/2024/`, `data/**/2025/`)
+- Use sync script to mirror local data folders safely:
+
+```bash
+./scripts/sync_brightlands_data.sh
+```
+
 This repository contains:
 - A CV training pipeline (YOLO, RT-DETR, classical baseline)
 - A full-stack web app (React + FastAPI)
