@@ -37,7 +37,7 @@ pip install -r requirements.txt
 ./scripts/start.sh
 ```
 
-Backend runs on: `http://localhost:8000`  
+Backend runs on: `http://localhost:8000`
 API docs: `http://localhost:8000/docs`
 
 Default seeded admin:
@@ -96,15 +96,15 @@ This repository contains:
 
 ## What is in this repo
 
-- `apps/frontend`  
+- `apps/frontend`
   React/Vite UI for login, map-based fields/traps, uploads, analytics, and exploratory reports
-- `apps/backend`  
+- `apps/backend`
   FastAPI API with JWT auth, uploads/inference, analytics, environment sync, report generation
-- `apps/poc-model`  
+- `apps/poc-model`
   Deployed model artifacts used by backend inference (`swd_yolo_best.pt`, `model_metrics.json`)
-- `src`, `configs`, `data`, `runs`  
+- `src`, `configs`, `data`, `runs`
   Training/evaluation pipeline and experiment artifacts
-- `docker-compose.yml`  
+- `docker-compose.yml`
   Local PostgreSQL + Neo4j
 
 See [REPO_STRUCTURE.md](/Users/louis.ferger-andrews/Desktop/insect_yellow_tape/insect-detection-yellow-traps/REPO_STRUCTURE.md) for a concise tree overview.
@@ -165,11 +165,11 @@ Frontend uses `VITE_API_BASE` (defaults to `http://localhost:8000`).
 
 ## Core web workflow
 
-1. Log in  
-2. Create field (draw polygon on map)  
-3. Place trap points in field  
-4. Upload trap images by selecting trap + date range  
-5. Run inference and view analytics  
+1. Log in
+2. Create field (draw polygon on map)
+3. Place trap points in field
+4. Upload trap images by selecting trap + date range
+5. Run inference and view analytics
 6. Use Exploratory Analysis for field-scoped report generation (HTML export with charts)
 
 ## CV pipeline quickstart (CLI)
