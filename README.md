@@ -74,6 +74,21 @@ Frontend runs on: `http://localhost:5173`
 ./scripts/sync_brightlands_data.sh
 ```
 
+## Contribution and Standards
+
+- [Contributing Guide](CONTRIBUTING.md)
+- [Code of Conduct](CODE_OF_CONDUCT.md)
+- [Security Policy](SECURITY.md)
+- [Repository Standards](docs/standards/repository.md)
+- [Python Standards](docs/standards/python.md)
+- [TypeScript Standards](docs/standards/typescript.md)
+
+Quick quality gate before committing:
+
+```bash
+./scripts/check_quality.sh
+```
+
 This repository contains:
 - A CV training pipeline (YOLO, RT-DETR, classical baseline)
 - A full-stack web app (React + FastAPI)
