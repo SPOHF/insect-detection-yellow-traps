@@ -3,13 +3,13 @@ from __future__ import annotations
 from datetime import date, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import and_, func
+from sqlalchemy import and_, extract, func
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
 from app.db.session import get_db
 from app.models import EnvironmentalDaily, EnvironmentalSourceDaily, FieldMap, TrapUpload, User
-from app.services.environment_service import infer_sync_start_date, sync_environment_for_field
+from app.services.environment_service import infer_sync_end_date, infer_sync_start_date, sync_environment_for_field
 
 router = APIRouter(prefix='/api/environment', tags=['environment'])
 
@@ -42,7 +42,7 @@ def sync_field_environment(
             status_code=400,
             detail='No trap uploads found yet for this field. Upload at least one trap image first.',
         )
-    end_date = date.fromisoformat(force_end) if force_end else date.today()
+    end_date = date.fromisoformat(force_end) if force_end else (infer_sync_end_date(db, field.id) or date.today())
 
     result = sync_environment_for_field(db, field, start_date, end_date)
     return {
@@ -54,6 +54,7 @@ def sync_field_environment(
 
 @router.get('/overview')
 def environment_overview(
+    year: int | None = Query(default=None, ge=2000, le=2100),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -62,24 +63,31 @@ def environment_overview(
         field_query = field_query.filter(FieldMap.owner_user_id == current_user.id)
     fields = field_query.order_by(FieldMap.created_at.desc()).all()
 
+    years_query = db.query(extract('year', EnvironmentalDaily.observation_date).label('year')).distinct()
+    if current_user.role != 'admin':
+        years_query = years_query.join(FieldMap, FieldMap.id == EnvironmentalDaily.field_id).filter(FieldMap.owner_user_id == current_user.id)
+    available_years = [int(row.year) for row in years_query.order_by('year').all() if row.year is not None]
+
     output = []
     for field in fields:
-        row = (
-            db.query(
-                func.count(EnvironmentalDaily.id).label('records'),
-                func.min(EnvironmentalDaily.observation_date).label('start_date'),
-                func.max(EnvironmentalDaily.observation_date).label('end_date'),
-                func.max(EnvironmentalDaily.fetched_at).label('last_fetch_at'),
-            )
-            .filter(EnvironmentalDaily.field_id == field.id)
-            .one()
-        )
-        latest = (
-            db.query(EnvironmentalDaily)
-            .filter(EnvironmentalDaily.field_id == field.id)
-            .order_by(EnvironmentalDaily.observation_date.desc())
-            .first()
-        )
+        row_query = db.query(
+            func.count(EnvironmentalDaily.id).label('records'),
+            func.min(EnvironmentalDaily.observation_date).label('start_date'),
+            func.max(EnvironmentalDaily.observation_date).label('end_date'),
+            func.max(EnvironmentalDaily.fetched_at).label('last_fetch_at'),
+        ).filter(EnvironmentalDaily.field_id == field.id)
+        latest_query = db.query(EnvironmentalDaily).filter(EnvironmentalDaily.field_id == field.id)
+        if year is not None:
+            row_query = row_query.filter(extract('year', EnvironmentalDaily.observation_date) == year)
+            latest_query = latest_query.filter(extract('year', EnvironmentalDaily.observation_date) == year)
+        row = row_query.one()
+        latest = latest_query.order_by(EnvironmentalDaily.observation_date.desc()).first()
+        source_query = db.query(
+            EnvironmentalSourceDaily.provider.label('provider'),
+            func.count(EnvironmentalSourceDaily.id).label('count'),
+        ).filter(EnvironmentalSourceDaily.field_id == field.id)
+        if year is not None:
+            source_query = source_query.filter(extract('year', EnvironmentalSourceDaily.observation_date) == year)
         output.append(
             {
                 'field_id': field.id,
@@ -101,20 +109,12 @@ def environment_overview(
                 ),
                 'sources': {
                     provider: int(count)
-                    for provider, count in (
-                        db.query(
-                            EnvironmentalSourceDaily.provider.label('provider'),
-                            func.count(EnvironmentalSourceDaily.id).label('count'),
-                        )
-                        .filter(EnvironmentalSourceDaily.field_id == field.id)
-                        .group_by(EnvironmentalSourceDaily.provider)
-                        .all()
-                    )
+                    for provider, count in source_query.group_by(EnvironmentalSourceDaily.provider).all()
                 },
             }
         )
 
-    return {'fields': output}
+    return {'selected_year': year, 'available_years': available_years, 'fields': output}
 
 
 @router.get('/fields/{field_id}/timeseries')
@@ -122,16 +122,23 @@ def environment_field_timeseries(
     field_id: str,
     weeks: int = Query(default=10, ge=1, le=520),
     all_data: bool = False,
+    year: int | None = Query(default=None, ge=2000, le=2100),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     field = _get_field_or_403(db, field_id, current_user)
 
     # derive range from most recent upload/environment date
-    latest_upload_date = db.query(func.max(TrapUpload.capture_date)).filter(TrapUpload.field_id == field.id).scalar()
-    earliest_upload_date = db.query(func.min(TrapUpload.capture_date)).filter(TrapUpload.field_id == field.id).scalar()
-    latest_env_date = db.query(func.max(EnvironmentalDaily.observation_date)).filter(EnvironmentalDaily.field_id == field.id).scalar()
-    earliest_env_date = db.query(func.min(EnvironmentalDaily.observation_date)).filter(EnvironmentalDaily.field_id == field.id).scalar()
+    upload_query = db.query(TrapUpload).filter(TrapUpload.field_id == field.id)
+    env_query = db.query(EnvironmentalDaily).filter(EnvironmentalDaily.field_id == field.id)
+    if year is not None:
+        upload_query = upload_query.filter(extract('year', TrapUpload.capture_date) == year)
+        env_query = env_query.filter(extract('year', EnvironmentalDaily.observation_date) == year)
+
+    latest_upload_date = upload_query.with_entities(func.max(TrapUpload.capture_date)).scalar()
+    earliest_upload_date = upload_query.with_entities(func.min(TrapUpload.capture_date)).scalar()
+    latest_env_date = env_query.with_entities(func.max(EnvironmentalDaily.observation_date)).scalar()
+    earliest_env_date = env_query.with_entities(func.min(EnvironmentalDaily.observation_date)).scalar()
 
     latest_candidates = [d for d in [latest_upload_date, latest_env_date] if d is not None]
     latest_date = max(latest_candidates) if latest_candidates else date.today()
@@ -158,8 +165,30 @@ def environment_field_timeseries(
                 TrapUpload.capture_date <= latest_date,
             )
         )
+        .filter(extract('year', TrapUpload.capture_date) == year if year is not None else True)
         .group_by(func.date_trunc('week', TrapUpload.capture_date))
         .order_by(func.date_trunc('week', TrapUpload.capture_date))
+        .all()
+    )
+
+    trap_weekly_rows = (
+        db.query(
+            func.date_trunc('week', TrapUpload.capture_date).label('week_start'),
+            TrapUpload.trap_code.label('trap_code'),
+            func.count(TrapUpload.id).label('uploads'),
+            func.coalesce(func.avg(TrapUpload.detection_count), 0.0).label('avg_population'),
+            func.coalesce(func.sum(TrapUpload.detection_count), 0).label('total_population'),
+        )
+        .filter(
+            and_(
+                TrapUpload.field_id == field.id,
+                TrapUpload.capture_date >= start_date,
+                TrapUpload.capture_date <= latest_date,
+            )
+        )
+        .filter(extract('year', TrapUpload.capture_date) == year if year is not None else True)
+        .group_by(func.date_trunc('week', TrapUpload.capture_date), TrapUpload.trap_code)
+        .order_by(func.date_trunc('week', TrapUpload.capture_date), TrapUpload.trap_code)
         .all()
     )
 
@@ -179,6 +208,7 @@ def environment_field_timeseries(
                 EnvironmentalDaily.observation_date <= latest_date,
             )
         )
+        .filter(extract('year', EnvironmentalDaily.observation_date) == year if year is not None else True)
         .group_by(func.date_trunc('week', EnvironmentalDaily.observation_date))
         .order_by(func.date_trunc('week', EnvironmentalDaily.observation_date))
         .all()
@@ -204,14 +234,26 @@ def environment_field_timeseries(
         }
         for row in weather_rows
     ]
+    trap_weekly = [
+        {
+            'week_start': row.week_start.date().isoformat() if hasattr(row.week_start, 'date') else str(row.week_start)[:10],
+            'trap_code': row.trap_code,
+            'uploads': int(row.uploads or 0),
+            'avg_population': round(float(row.avg_population or 0.0), 3),
+            'total_population': int(row.total_population or 0),
+        }
+        for row in trap_weekly_rows
+    ]
 
     return {
         'field_id': field.id,
         'field_name': field.name,
         'weeks': window_weeks,
+        'selected_year': year,
         'all_data': all_data,
         'start_date': start_date.isoformat(),
         'end_date': latest_date.isoformat(),
         'population_weekly': pop_weekly,
         'weather_weekly': weather_weekly,
+        'trap_weekly': trap_weekly,
     }
