@@ -87,6 +87,9 @@ export type UploadSummary = {
 
 export type AnalyticsOverview = {
   scope: 'all-fields' | 'owned-fields';
+  selected_field_id?: string | null;
+  selected_year?: number | null;
+  available_years?: number[];
   totals: {
     uploads: number;
     detections: number;
@@ -160,6 +163,8 @@ export type ExploratoryReportResponse = ExploratoryChatResponse & {
 };
 
 export type EnvironmentOverview = {
+  selected_year?: number | null;
+  available_years?: number[];
   fields: Array<{
     field_id: string;
     field_name: string;
@@ -182,6 +187,7 @@ export type FieldTimeseries = {
   field_id: string;
   field_name: string;
   weeks: number;
+  selected_year?: number | null;
   all_data?: boolean;
   start_date: string;
   end_date: string;
@@ -198,5 +204,12 @@ export type FieldTimeseries = {
     gdd_avg: number;
     deficit_avg: number;
     heat_stress_avg: number;
+  }>;
+  trap_weekly: Array<{
+    week_start: string;
+    trap_code: string;
+    uploads: number;
+    avg_population: number;
+    total_population: number;
   }>;
 };

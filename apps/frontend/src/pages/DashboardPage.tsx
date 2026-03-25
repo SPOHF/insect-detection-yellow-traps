@@ -15,13 +15,23 @@ import type {
   UploadSummary,
 } from '../types/api';
 
+const BLUE_SCALE = {
+  b100: '#dbeafe',
+  b300: '#93c5fd',
+  b400: '#60a5fa',
+  b500: '#3b82f6',
+  b600: '#2563eb',
+  b700: '#1d4ed8',
+  b800: '#1e40af',
+};
+
 function SimpleBarChart({
   title,
   labels,
   values,
   xLabel,
   yLabel,
-  color = '#0f5f8d',
+  color = BLUE_SCALE.b600,
 }: {
   title: string;
   labels: string[];
@@ -53,24 +63,31 @@ function SimpleBarChart({
   const yTicks = 5;
   const tickValues = Array.from({ length: yTicks + 1 }, (_, i) => domainMin + ((domainMax - domainMin) * i) / yTicks).reverse();
   const fmt = (v: number) => (Math.abs(v) >= 100 ? v.toFixed(0) : v.toFixed(1));
+  const gradId = `barFillBlue-${title.replace(/[^a-zA-Z0-9]/g, '')}`;
 
   return (
     <div className="card">
       <h3>{title}</h3>
       <svg viewBox={`0 0 ${width} ${height}`} className="line-chart">
+        <defs>
+          <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={BLUE_SCALE.b400} />
+            <stop offset="100%" stopColor={color} />
+          </linearGradient>
+        </defs>
         {tickValues.map((tick) => {
           const y = yFor(tick);
           return (
             <g key={`tick-${tick}`}>
-              <line x1={margin.left} y1={y} x2={width - margin.right} y2={y} stroke="#e2e8f0" strokeWidth="1" />
+              <line x1={margin.left} y1={y} x2={width - margin.right} y2={y} stroke="#dbeafe" strokeWidth="1" />
               <text x={margin.left - 8} y={y + 4} textAnchor="end" fontSize="11" fill="#475569">
                 {fmt(tick)}
               </text>
             </g>
           );
         })}
-        <line x1={margin.left} y1={baselineY} x2={width - margin.right} y2={baselineY} stroke="#64748b" strokeWidth="1.2" />
-        <line x1={margin.left} y1={margin.top} x2={margin.left} y2={height - margin.bottom} stroke="#64748b" strokeWidth="1.2" />
+        <line x1={margin.left} y1={baselineY} x2={width - margin.right} y2={baselineY} stroke="#1e3a8a" strokeWidth="1.2" />
+        <line x1={margin.left} y1={margin.top} x2={margin.left} y2={height - margin.bottom} stroke="#1e3a8a" strokeWidth="1.2" />
         {values.map((value, idx) => {
           const x = margin.left + idx * (barWidth + gap) + gap / 2;
           const y = yFor(value);
@@ -79,7 +96,7 @@ function SimpleBarChart({
           const barH = Math.max(2, Math.abs(y - yNeg));
           return (
             <g key={`${labels[idx]}-${idx}`}>
-              <rect x={x} y={barY} width={barWidth} height={barH} fill={color}>
+              <rect x={x} y={barY} width={barWidth} height={barH} fill={`url(#${gradId})`} rx="2">
                 <title>{`${labels[idx]}: ${value.toFixed(2)}`}</title>
               </rect>
               <text x={x + barWidth / 2} y={height - margin.bottom + 14} textAnchor="middle" fontSize="10" fill="#64748b">
@@ -112,7 +129,7 @@ function SimpleLineChart({
   values,
   xLabel,
   yLabel,
-  stroke = '#2563eb',
+  stroke = BLUE_SCALE.b600,
 }: {
   title: string;
   labels: string[];
@@ -143,23 +160,36 @@ function SimpleLineChart({
   const yTicks = 5;
   const tickValues = Array.from({ length: yTicks + 1 }, (_, i) => domainMin + ((domainMax - domainMin) * i) / yTicks).reverse();
   const fmt = (v: number) => (Math.abs(v) >= 100 ? v.toFixed(0) : v.toFixed(1));
+  const areaId = `lineAreaBlue-${title.replace(/[^a-zA-Z0-9]/g, '')}`;
   return (
     <div className="card">
       <h3>{title}</h3>
       <svg viewBox={`0 0 ${width} ${height}`} className="line-chart">
+        <defs>
+          <linearGradient id={areaId} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={BLUE_SCALE.b300} stopOpacity="0.35" />
+            <stop offset="100%" stopColor={BLUE_SCALE.b100} stopOpacity="0.05" />
+          </linearGradient>
+        </defs>
         {tickValues.map((tick) => {
           const y = yFor(tick);
           return (
             <g key={`line-tick-${tick}`}>
-              <line x1={margin.left} y1={y} x2={width - margin.right} y2={y} stroke="#e2e8f0" strokeWidth="1" />
+              <line x1={margin.left} y1={y} x2={width - margin.right} y2={y} stroke="#dbeafe" strokeWidth="1" />
               <text x={margin.left - 8} y={y + 4} textAnchor="end" fontSize="11" fill="#475569">
                 {fmt(tick)}
               </text>
             </g>
           );
         })}
-        <line x1={margin.left} y1={height - margin.bottom} x2={width - margin.right} y2={height - margin.bottom} stroke="#64748b" strokeWidth="1.2" />
-        <line x1={margin.left} y1={margin.top} x2={margin.left} y2={height - margin.bottom} stroke="#64748b" strokeWidth="1.2" />
+        <line x1={margin.left} y1={height - margin.bottom} x2={width - margin.right} y2={height - margin.bottom} stroke="#1e3a8a" strokeWidth="1.2" />
+        <line x1={margin.left} y1={margin.top} x2={margin.left} y2={height - margin.bottom} stroke="#1e3a8a" strokeWidth="1.2" />
+        {values.length > 1 ? (
+          <polygon
+            points={`${points} ${xFor(values.length - 1)},${height - margin.bottom} ${xFor(0)},${height - margin.bottom}`}
+            fill={`url(#${areaId})`}
+          />
+        ) : null}
         <polyline fill="none" stroke={stroke} strokeWidth="3" points={points} />
         {values.map((v, i) => (
           <circle key={`pt-${i}`} cx={xFor(i)} cy={yFor(v)} r="3" fill={stroke}>
@@ -210,6 +240,7 @@ export default function DashboardPage() {
   const [modelStats, setModelStats] = useState<ModelStats | null>(null);
   const [environmentOverview, setEnvironmentOverview] = useState<EnvironmentOverview | null>(null);
   const [fieldOptions, setFieldOptions] = useState<FieldMapSummary[]>([]);
+  const [envFieldDetail, setEnvFieldDetail] = useState<FieldMapDetail | null>(null);
   const [error, setError] = useState('');
 
   const [selectedTrap, setSelectedTrap] = useState<TrapPoint | null>(null);
@@ -223,11 +254,14 @@ export default function DashboardPage() {
   const [chatInput, setChatInput] = useState('');
   const [chatBusy, setChatBusy] = useState(false);
   const [chatFieldId, setChatFieldId] = useState('');
+  const [chatYear, setChatYear] = useState<string>('all');
   const [chatRange, setChatRange] = useState<string>('all');
+  const [envDataScope, setEnvDataScope] = useState<string>('all');
+  const [availableYears, setAvailableYears] = useState<number[]>([]);
   const [envBusy, setEnvBusy] = useState(false);
   const [envSyncFieldId, setEnvSyncFieldId] = useState('');
-  const [timeseriesRange, setTimeseriesRange] = useState<string>('all');
   const [timeseriesBusy, setTimeseriesBusy] = useState(false);
+  const [selectedWeekIndex, setSelectedWeekIndex] = useState<number>(0);
   const [timeseries, setTimeseries] = useState<FieldTimeseries | null>(null);
   const [chatMessages, setChatMessages] = useState<
     Array<{ role: 'user' | 'assistant'; text: string; reportHref?: string; reportFilename?: string }>
@@ -238,6 +272,23 @@ export default function DashboardPage() {
     },
   ]);
 
+  const fmt = (value: number | null | undefined, digits: number = 1) => {
+    if (value === null || value === undefined || Number.isNaN(value)) return '-';
+    return Number(value).toFixed(digits);
+  };
+
+  const parseEnvScope = (scope: string): { year?: number; weeks?: number; allData: boolean } => {
+    if (scope.startsWith('year:')) {
+      const year = Number.parseInt(scope.split(':')[1], 10);
+      return Number.isFinite(year) ? { year, allData: true } : { allData: true };
+    }
+    if (scope.startsWith('weeks:')) {
+      const weeks = Number.parseInt(scope.split(':')[1], 10);
+      return Number.isFinite(weeks) ? { weeks, allData: false } : { allData: true };
+    }
+    return { allData: true };
+  };
+
   const loadUploads = async () => {
     if (!token) return;
     const uploadRows = await apiClient.get<UploadSummary[]>('/api/analysis/uploads', token);
@@ -246,8 +297,21 @@ export default function DashboardPage() {
 
   const loadAnalytics = async () => {
     if (!token) return;
-    const payload = await apiClient.get<AnalyticsOverview>('/api/analytics/overview', token);
+    const { year: selectedYear } = parseEnvScope(envDataScope);
+    const parts: string[] = [];
+    if (selectedYear) parts.push(`year=${selectedYear}`);
+    if (envSyncFieldId) parts.push(`field_id=${encodeURIComponent(envSyncFieldId)}`);
+    const query = parts.length > 0 ? `?${parts.join('&')}` : '';
+    const payload = await apiClient.get<AnalyticsOverview>(`/api/analytics/overview${query}`, token);
     setAnalytics(payload);
+    const nextYears = payload.available_years ?? [];
+    if (nextYears.length > 0) setAvailableYears(nextYears);
+    if (selectedYear && nextYears.length > 0 && !nextYears.includes(selectedYear)) {
+      setEnvDataScope('all');
+    }
+    if (chatYear !== 'all' && nextYears.length > 0 && !nextYears.includes(Number.parseInt(chatYear, 10))) {
+      setChatYear('all');
+    }
   };
 
   const loadModelStats = async () => {
@@ -256,10 +320,25 @@ export default function DashboardPage() {
     setModelStats(payload);
   };
 
+  const loadAvailableYears = async (fieldId?: string) => {
+    if (!token) return;
+    const query = fieldId ? `?field_id=${encodeURIComponent(fieldId)}` : '';
+    const payload = await apiClient.get<AnalyticsOverview>(`/api/analytics/overview${query}`, token);
+    const nextYears = payload.available_years ?? [];
+    setAvailableYears(nextYears);
+    if (chatYear !== 'all' && !nextYears.includes(Number.parseInt(chatYear, 10))) {
+      setChatYear('all');
+    }
+  };
+
   const loadEnvironmentOverview = async () => {
     if (!token) return;
-    const payload = await apiClient.get<EnvironmentOverview>('/api/environment/overview', token);
+    const { year: selectedYear } = parseEnvScope(envDataScope);
+    const query = selectedYear ? `?year=${selectedYear}` : '';
+    const payload = await apiClient.get<EnvironmentOverview>(`/api/environment/overview${query}`, token);
     setEnvironmentOverview(payload);
+    const nextYears = payload.available_years ?? [];
+    if (nextYears.length > 0) setAvailableYears(nextYears);
     if (!envSyncFieldId && payload.fields.length > 0) {
       const preferred = payload.fields.find((row) => row.records > 0) ?? payload.fields[0];
       setEnvSyncFieldId(preferred.field_id);
@@ -275,9 +354,12 @@ export default function DashboardPage() {
     }
   };
 
-  const loadFieldTimeseries = async (fieldId: string, range: string = timeseriesRange) => {
+  const loadFieldTimeseries = async (fieldId: string) => {
     if (!token || !fieldId) return;
-    const query = range === 'all' ? 'all_data=true' : `weeks=${Number.parseInt(range, 10) || 10}`;
+    const { year: selectedYear, weeks: selectedWeeks, allData } = parseEnvScope(envDataScope);
+    const parts = [allData ? 'all_data=true' : `weeks=${selectedWeeks ?? 10}`];
+    if (selectedYear) parts.push(`year=${selectedYear}`);
+    const query = parts.join('&');
     const payload = await apiClient.get<FieldTimeseries>(`/api/environment/fields/${fieldId}/timeseries?${query}`, token);
     setTimeseries(payload);
   };
@@ -297,7 +379,7 @@ export default function DashboardPage() {
     void Promise.all([loadAnalytics(), loadEnvironmentOverview(), loadFieldOptions()]).catch((err) => {
       setError(err instanceof Error ? err.message : 'Failed to load analytics');
     });
-  }, [section, token]);
+  }, [section, token, envDataScope, envSyncFieldId]);
 
   useEffect(() => {
     if (section !== 'explore' || !token) return;
@@ -307,6 +389,13 @@ export default function DashboardPage() {
   }, [section, token]);
 
   useEffect(() => {
+    if (section !== 'explore' || !token) return;
+    void loadAvailableYears(chatFieldId || undefined).catch((err) => {
+      setError(err instanceof Error ? err.message : 'Failed to load years');
+    });
+  }, [section, token, chatFieldId]);
+
+  useEffect(() => {
     if (section !== 'analytics' || !token || !envSyncFieldId) return;
     setTimeseriesBusy(true);
     void loadFieldTimeseries(envSyncFieldId)
@@ -314,7 +403,24 @@ export default function DashboardPage() {
         setError(err instanceof Error ? err.message : 'Failed to load field timeseries');
       })
       .finally(() => setTimeseriesBusy(false));
-  }, [section, token, envSyncFieldId, timeseriesRange]);
+  }, [section, token, envSyncFieldId, envDataScope]);
+
+  useEffect(() => {
+    if (section !== 'analytics' || !token || !envSyncFieldId) return;
+    void apiClient
+      .get<FieldMapDetail>(`/api/map/fields/${envSyncFieldId}`, token)
+      .then((payload) => setEnvFieldDetail(payload))
+      .catch(() => setEnvFieldDetail(null));
+  }, [section, token, envSyncFieldId]);
+
+  useEffect(() => {
+    const count = timeseries?.population_weekly.length ?? 0;
+    if (count > 0) {
+      setSelectedWeekIndex(count - 1);
+    } else {
+      setSelectedWeekIndex(0);
+    }
+  }, [timeseries?.field_id, timeseries?.selected_year, timeseries?.population_weekly.length]);
 
   useEffect(() => {
     if (section !== 'upload' || !token) return;
@@ -449,8 +555,66 @@ export default function DashboardPage() {
           running += value;
           return running;
         });
-        const trapAvg = (analytics?.by_trap ?? []).slice(0, 10).map((row) => (row.uploads > 0 ? Number((row.detections / row.uploads).toFixed(2)) : 0));
-        const periodLabel = timeseries?.all_data ? 'All-Time' : `${timeseries?.weeks ?? 10}-Week`;
+        const trapAggregates = new Map<string, { images: number; detections: number }>();
+        for (const row of timeseries?.trap_weekly ?? []) {
+          const baseTrap = row.trap_code.replace(/-S[AB]$/, '');
+          const prev = trapAggregates.get(baseTrap) ?? { images: 0, detections: 0 };
+          prev.images += row.uploads;
+          prev.detections += row.total_population;
+          trapAggregates.set(baseTrap, prev);
+        }
+        const trapSeries = Array.from(trapAggregates.entries())
+          .map(([trapCode, value]) => ({
+            trapCode,
+            images: value.images,
+            detections: value.detections,
+            avgPerImage: value.images > 0 ? value.detections / value.images : 0,
+          }))
+          .sort((a, b) => b.detections - a.detections)
+          .slice(0, 10);
+        const scope = parseEnvScope(envDataScope);
+        const periodLabel = scope.year ? `Year ${scope.year}` : scope.weeks ? `Last ${scope.weeks} Weeks` : 'All-Time';
+        const weekCount = timeseries?.population_weekly.length ?? 0;
+        const safeWeekIndex = Math.min(Math.max(selectedWeekIndex, 0), Math.max(weekCount - 1, 0));
+        const selectedWeek = timeseries?.population_weekly[safeWeekIndex];
+        const selectedWeekStart = selectedWeek?.week_start ?? null;
+        const selectedWeekTrapRows = (timeseries?.trap_weekly ?? [])
+          .filter((row) => row.week_start === selectedWeekStart)
+          .sort((a, b) => b.total_population - a.total_population);
+        const selectedWeekTrapTop = selectedWeekTrapRows.slice(0, 20);
+        const weekTrapMap = new Map(selectedWeekTrapRows.map((row) => [row.trap_code, row.total_population]));
+        const baseTraps = envFieldDetail?.traps ?? [];
+        const maxSideCount = Math.max(
+          1,
+          ...baseTraps.flatMap((trap) => [weekTrapMap.get(`${trap.name}-SA`) ?? 0, weekTrapMap.get(`${trap.name}-SB`) ?? 0])
+        );
+        const trapLats = baseTraps.map((trap) => trap.lat);
+        const trapLngs = baseTraps.map((trap) => trap.lng);
+        const minLat = trapLats.length ? Math.min(...trapLats) : 0;
+        const maxLat = trapLats.length ? Math.max(...trapLats) : 1;
+        const minLng = trapLngs.length ? Math.min(...trapLngs) : 0;
+        const maxLng = trapLngs.length ? Math.max(...trapLngs) : 1;
+        const latSpan = Math.max(maxLat - minLat, 1e-9);
+        const lngSpan = Math.max(maxLng - minLng, 1e-9);
+        const toMapXY = (lat: number, lng: number) => {
+          const width = 700;
+          const height = 420;
+          const margin = 32;
+          const x = margin + ((lng - minLng) / lngSpan) * (width - margin * 2);
+          const y = margin + (1 - (lat - minLat) / latSpan) * (height - margin * 2);
+          return { x, y };
+        };
+        const heatColor = (value: number) => {
+          const ratio = Math.max(0, Math.min(1, value / maxSideCount));
+          if (ratio < 0.2) return '#dbeafe';
+          if (ratio < 0.4) return '#93c5fd';
+          if (ratio < 0.6) return '#60a5fa';
+          if (ratio < 0.8) return '#2563eb';
+          return '#1e3a8a';
+        };
+        const totalUploads = (timeseries?.population_weekly ?? []).reduce((sum, row) => sum + row.uploads, 0);
+        const totalDetections = (timeseries?.population_weekly ?? []).reduce((sum, row) => sum + row.total_population, 0);
+        const avgPerImage = totalUploads > 0 ? totalDetections / totalUploads : 0;
         return (
           <>
             <p>
@@ -468,12 +632,17 @@ export default function DashboardPage() {
                     </option>
                   ))}
                 </select>
-                <select value={timeseriesRange} onChange={(event) => setTimeseriesRange(event.target.value)}>
+                <select id="env-data-scope" value={envDataScope} onChange={(event) => setEnvDataScope(event.target.value)}>
                   <option value="all">All data</option>
-                  <option value="4">4 weeks</option>
-                  <option value="10">10 weeks</option>
-                  <option value="26">26 weeks</option>
-                  <option value="52">52 weeks</option>
+                  <option value="weeks:4">Last 4 weeks</option>
+                  <option value="weeks:10">Last 10 weeks</option>
+                  <option value="weeks:26">Last 26 weeks</option>
+                  <option value="weeks:52">Last 52 weeks</option>
+                  {availableYears.map((year) => (
+                    <option key={`env-year-${year}`} value={`year:${year}`}>
+                      Year {year}
+                    </option>
+                  ))}
                 </select>
                 <button
                   type="button"
@@ -501,7 +670,7 @@ export default function DashboardPage() {
                     if (!envSyncFieldId) return;
                     setTimeseriesBusy(true);
                     try {
-                      await loadFieldTimeseries(envSyncFieldId, timeseriesRange);
+                      await loadFieldTimeseries(envSyncFieldId);
                     } catch (err) {
                       setError(err instanceof Error ? err.message : 'Failed to refresh charts');
                     } finally {
@@ -532,15 +701,15 @@ export default function DashboardPage() {
                     </div>
                     <div>
                       <p>
-                        <strong>Latest day:</strong> {selected.latest?.date ?? '-'}
+                        <strong>Latest observed day:</strong> {selected.latest?.date ?? '-'}
                       </p>
                       <p>
-                        <strong>Temp:</strong> {selected.latest?.temperature_mean_c ?? '-'} C | <strong>Rain:</strong>{' '}
-                        {selected.latest?.precipitation_mm ?? '-'} mm
+                        <strong>Temp (daily mean):</strong> {fmt(selected.latest?.temperature_mean_c)} C | <strong>Rain (daily sum):</strong>{' '}
+                        {fmt(selected.latest?.precipitation_mm)} mm
                       </p>
                       <p>
-                        <strong>GDD:</strong> {selected.latest?.gdd_base10_c ?? '-'} | <strong>Deficit:</strong>{' '}
-                        {selected.latest?.water_deficit_mm ?? '-'} mm
+                        <strong>GDD (daily):</strong> {fmt(selected.latest?.gdd_base10_c, 2)} | <strong>Deficit (daily):</strong>{' '}
+                        {fmt(selected.latest?.water_deficit_mm, 2)} mm
                       </p>
                     </div>
                   </div>
@@ -550,13 +719,97 @@ export default function DashboardPage() {
             {timeseries ? (
               <>
                 <SimpleBarChart
-                  title={`${periodLabel} Population (Avg per Upload) | ${timeseries.field_name}`}
+                  title={`${periodLabel} Population (Avg per Image) | ${timeseries.field_name}`}
                   labels={timeseries.population_weekly.map((row) => row.week_start.slice(5))}
                   values={timeseries.population_weekly.map((row) => row.avg_population)}
                   xLabel="Week"
-                  yLabel="Avg detections per upload"
-                  color="#0f766e"
+                  yLabel="Avg detections per image"
+                  color={BLUE_SCALE.b700}
                 />
+                <div className="card">
+                  <h3>{timeseries.field_name} Overview ({periodLabel})</h3>
+                  <div className="grid-2">
+                    <div>
+                      <p>
+                        <strong>Uploads:</strong> {totalUploads}
+                      </p>
+                      <p>
+                        <strong>Total detections:</strong> {totalDetections}
+                      </p>
+                      <p>
+                        <strong>Average per image:</strong> {avgPerImage.toFixed(2)}
+                      </p>
+                    </div>
+                    <div>
+                      <p>
+                        <strong>Coverage:</strong> {timeseries.start_date} to {timeseries.end_date}
+                      </p>
+                      <p>
+                        <strong>Weekly points:</strong> {timeseries.population_weekly.length}
+                      </p>
+                      <p>
+                        <strong>Traps active:</strong> {baseTraps.length} ({baseTraps.length * 2} sides)
+                      </p>
+                    </div>
+                  </div>
+                  {weekCount > 0 ? (
+                    <>
+                      <label>
+                        Week focus: <strong>{selectedWeek?.week_start ?? '-'}</strong>
+                      </label>
+                      <input
+                        type="range"
+                        min={0}
+                        max={Math.max(weekCount - 1, 0)}
+                        value={safeWeekIndex}
+                        onChange={(event) => setSelectedWeekIndex(Number.parseInt(event.target.value, 10) || 0)}
+                      />
+                      <p>
+                        Selected week images={selectedWeek?.uploads ?? 0}, total detections={selectedWeek?.total_population ?? 0}, avg/image=
+                        {selectedWeek?.avg_population?.toFixed(2) ?? '0.00'}
+                      </p>
+                      <div className="grid-2">
+                        <SimpleBarChart
+                          title={`Trap Development for ${selectedWeek?.week_start ?? '-'} (Detections)`}
+                          labels={selectedWeekTrapTop.map((row) => row.trap_code)}
+                          values={selectedWeekTrapTop.map((row) => row.total_population)}
+                          xLabel="Trap"
+                          yLabel="Detections in week"
+                          color={BLUE_SCALE.b600}
+                        />
+                        <div className="card">
+                          <h3>Trap Map (A/B Side Counts)</h3>
+                          <svg viewBox="0 0 700 420" className="line-chart">
+                            <rect x="8" y="8" width="684" height="404" fill="#f8fafc" stroke="#cbd5e1" strokeWidth="1" />
+                            {baseTraps.map((trap) => {
+                              const { x, y } = toMapXY(trap.lat, trap.lng);
+                              const sideA = weekTrapMap.get(`${trap.name}-SA`) ?? 0;
+                              const sideB = weekTrapMap.get(`${trap.name}-SB`) ?? 0;
+                              return (
+                                <g key={`trap-map-${trap.id}`}>
+                                  <circle cx={x} cy={y} r="5" fill={BLUE_SCALE.b800} />
+                                  <text x={x} y={y + 18} textAnchor="middle" fontSize="10" fill={BLUE_SCALE.b800}>
+                                    {trap.name}
+                                  </text>
+                                  <rect x={x - 28} y={y - 34} width="24" height="14" rx="2" fill={heatColor(sideA)} stroke={BLUE_SCALE.b800} strokeWidth="0.7" />
+                                  <text x={x - 16} y={y - 24} textAnchor="middle" fontSize="9" fill={BLUE_SCALE.b800}>
+                                    {sideA}
+                                  </text>
+                                  <rect x={x + 4} y={y - 34} width="24" height="14" rx="2" fill={heatColor(sideB)} stroke={BLUE_SCALE.b800} strokeWidth="0.7" />
+                                  <text x={x + 16} y={y - 24} textAnchor="middle" fontSize="9" fill={BLUE_SCALE.b800}>
+                                    {sideB}
+                                  </text>
+                                </g>
+                              );
+                            })}
+                          </svg>
+                        </div>
+                      </div>
+                    </>
+                  ) : (
+                    <p>No weekly upload data in selected scope.</p>
+                  )}
+                </div>
                 <div className="grid-2">
                   <SimpleLineChart
                     title="Weather Trend: Weekly Average Temperature (°C)"
@@ -564,7 +817,7 @@ export default function DashboardPage() {
                     values={timeseries.weather_weekly.map((row) => row.temp_avg)}
                     xLabel="Week"
                     yLabel="Temperature (°C)"
-                    stroke="#2563eb"
+                    stroke={BLUE_SCALE.b600}
                   />
                   <SimpleLineChart
                     title="Weather Trend: Weekly Rain Sum (mm)"
@@ -572,7 +825,7 @@ export default function DashboardPage() {
                     values={timeseries.weather_weekly.map((row) => row.rain_sum)}
                     xLabel="Week"
                     yLabel="Rainfall (mm)"
-                    stroke="#0ea5e9"
+                    stroke={BLUE_SCALE.b500}
                   />
                 </div>
                 <div className="grid-2">
@@ -582,7 +835,7 @@ export default function DashboardPage() {
                     values={timeseries.weather_weekly.map((row) => row.gdd_avg)}
                     xLabel="Week"
                     yLabel="GDD"
-                    stroke="#f59e0b"
+                    stroke={BLUE_SCALE.b700}
                   />
                   <SimpleLineChart
                     title="Plant Signal: Weekly Water Deficit (mm)"
@@ -590,7 +843,7 @@ export default function DashboardPage() {
                     values={timeseries.weather_weekly.map((row) => row.deficit_avg)}
                     xLabel="Week"
                     yLabel="Water deficit (mm)"
-                    stroke="#dc2626"
+                    stroke={BLUE_SCALE.b800}
                   />
                 </div>
                 <div className="grid-2">
@@ -600,7 +853,7 @@ export default function DashboardPage() {
                     values={timeseries.population_weekly.map((row) => row.uploads)}
                     xLabel="Week"
                     yLabel="Uploads"
-                    color="#334155"
+                    color={BLUE_SCALE.b600}
                   />
                   <SimpleLineChart
                     title="Weekly Heat Stress Index"
@@ -608,7 +861,7 @@ export default function DashboardPage() {
                     values={timeseries.weather_weekly.map((row) => row.heat_stress_avg)}
                     xLabel="Week"
                     yLabel="Heat stress (°C above threshold)"
-                    stroke="#be123c"
+                    stroke={BLUE_SCALE.b700}
                   />
                 </div>
                 <div className="grid-2">
@@ -618,7 +871,7 @@ export default function DashboardPage() {
                     values={weekDetections}
                     xLabel="Week"
                     yLabel="Total detections"
-                    color="#4f46e5"
+                    color={BLUE_SCALE.b500}
                   />
                   <SimpleLineChart
                     title={`${periodLabel} Cumulative Detections`}
@@ -626,25 +879,25 @@ export default function DashboardPage() {
                     values={cumulative}
                     xLabel="Week"
                     yLabel="Cumulative detections"
-                    stroke="#7c3aed"
+                    stroke={BLUE_SCALE.b800}
                   />
                 </div>
                 <div className="grid-2">
                   <SimpleBarChart
-                    title="Trap Comparison (Detections)"
-                    labels={(analytics?.by_trap ?? []).slice(0, 10).map((row) => row.trap_code)}
-                    values={(analytics?.by_trap ?? []).slice(0, 10).map((row) => row.detections)}
+                    title="Trap-Side Comparison (Detections, Selected Field)"
+                    labels={trapSeries.map((row) => row.trapCode)}
+                    values={trapSeries.map((row) => row.detections)}
                     xLabel="Trap"
                     yLabel="Detections"
-                    color="#0d9488"
+                    color={BLUE_SCALE.b700}
                   />
                   <SimpleBarChart
-                    title="Trap Comparison (Avg per Upload)"
-                    labels={(analytics?.by_trap ?? []).slice(0, 10).map((row) => row.trap_code)}
-                    values={trapAvg}
+                    title="Trap Comparison (Avg per Image, Selected Field)"
+                    labels={trapSeries.map((row) => row.trapCode)}
+                    values={trapSeries.map((row) => Number(row.avgPerImage.toFixed(2)))}
                     xLabel="Trap"
-                    yLabel="Avg detections per upload"
-                    color="#059669"
+                    yLabel="Avg detections per image"
+                    color={BLUE_SCALE.b600}
                   />
                 </div>
               </>
@@ -748,6 +1001,7 @@ export default function DashboardPage() {
         {
           question,
           field_id: chatFieldId,
+          year: chatYear === 'all' ? undefined : Number.parseInt(chatYear, 10),
           all_data: chatRange === 'all',
           weeks: chatRange === 'all' ? undefined : Number.parseInt(chatRange, 10),
         },
@@ -789,6 +1043,14 @@ export default function DashboardPage() {
             {fieldOptions.map((field) => (
               <option key={field.id} value={field.id}>
                 {field.name}
+              </option>
+            ))}
+          </select>
+          <select value={chatYear} onChange={(e) => setChatYear(e.target.value)}>
+            <option value="all">All years</option>
+            {availableYears.map((year) => (
+              <option key={`chat-year-${year}`} value={String(year)}>
+                {year}
               </option>
             ))}
           </select>

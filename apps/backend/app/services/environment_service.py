@@ -355,3 +355,8 @@ def sync_environment_for_field(
 def infer_sync_start_date(db: Session, field_id: str) -> date | None:
     row = db.query(func.min(TrapUpload.capture_date).label('min_date')).filter(TrapUpload.field_id == field_id).one()
     return row.min_date
+
+
+def infer_sync_end_date(db: Session, field_id: str) -> date | None:
+    row = db.query(func.max(TrapUpload.capture_date).label('max_date')).filter(TrapUpload.field_id == field_id).one()
+    return row.max_date

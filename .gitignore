@@ -9,3 +9,12 @@ apps/frontend/node_modules/
 apps/frontend/dist/
 apps/backend/storage/uploads/
 apps/backend/.env
+apps/backend/*.log
+apps/backend/*.pid
+apps/frontend/*.log
+apps/frontend/*.pid
+
+# Local raw datasets (never commit)
+data/raw/
+data/**/2024/
+data/**/2025/
