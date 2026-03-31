@@ -269,7 +269,7 @@ Data is merged and stored in daily tables for analytics and exploratory reportin
   .venv/bin/python -m src.cli prepare-data --project insect_yellow --approach yolo --config configs/yolo.yaml
   ```
 
-### Frontend build/type errors
+### Frontend build or type errors
 - Reinstall deps:
   ```bash
   cd apps/frontend
