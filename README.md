@@ -74,6 +74,46 @@ Frontend runs on: `http://localhost:5173`
 ./scripts/sync_brightlands_data.sh
 ```
 
+## Container Reproducibility
+
+This repo now includes reproducible container definitions for app services and CI checks.
+
+### What is pinned
+
+- Backend base image: `python:3.11.9-slim-bookworm`
+- Frontend build base image: `node:20.11.1-bookworm-slim`
+- Frontend runtime image: `nginx:1.27.0-alpine`
+- Infrastructure images:
+  - `postgres:16.3`
+  - `neo4j:5.26.0`
+- Dependency locks:
+  - Python backend via exact `requirements.txt` versions
+  - Frontend via `package-lock.json` + `npm ci`
+
+### Build containers locally
+
+```bash
+docker build -t swd-monitoring-backend:local ./apps/backend
+docker build -t swd-monitoring-frontend:local ./apps/frontend
+```
+
+### Run full stack with compose
+
+```bash
+# infra services
+docker compose up -d
+
+# app services (backend + frontend)
+docker compose -f docker-compose.yml -f docker-compose.app.yml up -d --build
+```
+
+### CI enforcement
+
+GitHub Actions (`.github/workflows/ci.yml`) runs on push/PR and validates:
+- Backend Python compile checks
+- Frontend deterministic install + build (`npm ci && npm run build`)
+- Docker image builds for backend/frontend
+
 ## Contribution and Standards
 
 - [Contributing Guide](CONTRIBUTING.md)
