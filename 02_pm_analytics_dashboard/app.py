@@ -1040,52 +1040,109 @@ def _parse_coverage_pct(stdout: str, stderr: str) -> float:
     return 0.0
 
 
-def _run_root_pytest(repo_root: str) -> dict:
-    backend_dir = os.path.join(repo_root, "03_application", "backend")
-    backend_venv_python = os.path.join(backend_dir, ".venv", "bin", "python")
-    root_venv_python = os.path.join(repo_root, ".venv", "bin", "python")
+def _parse_coverage_json(path: str) -> dict:
+    if not os.path.exists(path):
+        return {"coverage_pct": 0.0, "covered_lines": 0, "total_lines": 0}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+        totals = payload.get("totals", {}) if isinstance(payload, dict) else {}
+        total_lines = int(totals.get("num_statements", 0) or 0)
+        covered_lines = int(totals.get("covered_lines", 0) or 0)
+        pct = (covered_lines / total_lines * 100.0) if total_lines else 0.0
+        return {"coverage_pct": pct, "covered_lines": covered_lines, "total_lines": total_lines}
+    except Exception:  # noqa: BLE001
+        return {"coverage_pct": 0.0, "covered_lines": 0, "total_lines": 0}
 
-    candidates = [backend_venv_python, root_venv_python, "python3"]
-    for py in candidates:
+
+def _parse_frontend_coverage_json(path: str) -> dict:
+    if not os.path.exists(path):
+        return {"coverage_pct": 0.0, "covered_lines": 0, "total_lines": 0}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+        total = payload.get("total", {}) if isinstance(payload, dict) else {}
+        lines = total.get("lines", {}) if isinstance(total, dict) else {}
+        total_lines = int(lines.get("total", 0) or 0)
+        covered_lines = int(lines.get("covered", 0) or 0)
+        pct = float(lines.get("pct", 0.0) or 0.0)
+        return {"coverage_pct": pct, "covered_lines": covered_lines, "total_lines": total_lines}
+    except Exception:  # noqa: BLE001
+        return {"coverage_pct": 0.0, "covered_lines": 0, "total_lines": 0}
+
+
+def _run_backend_tests(repo_root: str) -> dict:
+    backend_cov_json = os.path.join(repo_root, "03_application", "backend", ".coverage_backend.json")
+    root_venv_python = os.path.join(repo_root, ".venv", "bin", "python")
+    py_candidates = [root_venv_python, "python3"]
+    for py in py_candidates:
         if py != "python3" and not os.path.exists(py):
             continue
-        if _python_has_module(py, "pytest", repo_root):
-            result = _run_check(
-                [
-                    py,
-                    "-m",
-                    "pytest",
-                    "-q",
-                    "04_modeling_experimental/tests",
-                    "--cov=04_modeling_experimental/src",
-                    "--cov=03_application/backend/app",
-                    "--cov-report=term",
-                ],
-                repo_root,
-            )
-            result["label"] = "Runtime tests: pytest (04_modeling_experimental/tests)"
-            counts = _parse_pytest_counts(result.get("stdout", ""), result.get("stderr", ""))
-            result.update(counts)
-            result["coverage_pct"] = _parse_coverage_pct(result.get("stdout", ""), result.get("stderr", ""))
-            return result
+        if not _python_has_module(py, "pytest", repo_root):
+            continue
+        result = _run_check(
+            [
+                py,
+                "-m",
+                "pytest",
+                "-q",
+                "04_modeling_experimental/tests/backend",
+                "--cov=03_application/backend/app",
+                "--cov-report=term",
+                f"--cov-report=json:{backend_cov_json}",
+            ],
+            repo_root,
+        )
+        result["label"] = "Backend tests: pytest (03 application backend)"
+        counts = _parse_pytest_counts(result.get("stdout", ""), result.get("stderr", ""))
+        result.update(counts)
+        result.update(_parse_coverage_json(backend_cov_json))
+        return result
 
     return {
-        "label": "Runtime tests: pytest (04_modeling_experimental/tests)",
+        "label": "Backend tests: pytest (03 application backend)",
         "name": "pytest not available",
         "status": "FAIL",
         "returncode": 1,
         "passed_tests": 0,
         "failed_tests": 0,
         "coverage_pct": 0.0,
+        "covered_lines": 0,
+        "total_lines": 0,
         "stdout": "",
-        "stderr": "pytest is not installed in backend .venv, project .venv, or system python.",
+        "stderr": "pytest is not installed in project .venv or system python.",
     }
 
 
+def _parse_vitest_counts(stdout: str, stderr: str) -> dict:
+    text = f"{stdout}\n{stderr}"
+    passed = 0
+    failed = 0
+    m = re.search(r"(\d+)\s+passed", text)
+    if m:
+        passed = int(m.group(1))
+    m = re.search(r"(\d+)\s+failed", text)
+    if m:
+        failed = int(m.group(1))
+    return {"passed_tests": passed, "failed_tests": failed}
+
+
+def _run_frontend_tests(repo_root: str) -> dict:
+    frontend_dir = os.path.join(repo_root, "03_application", "frontend")
+    frontend_cov_json = os.path.join(frontend_dir, "coverage", "coverage-summary.json")
+    result = _run_check(["npm", "run", "test", "--", "--coverage"], frontend_dir)
+    result["label"] = "Frontend tests: vitest (03 application frontend)"
+    result.update(_parse_vitest_counts(result.get("stdout", ""), result.get("stderr", "")))
+    result.update(_parse_frontend_coverage_json(frontend_cov_json))
+    return result
+
+
 def run_quality_snapshot(repo_root: str) -> dict:
-    pytest_result = _run_root_pytest(repo_root)
-    pytest_result["category"] = "runtime"
-    runs = [pytest_result]
+    backend_result = _run_backend_tests(repo_root)
+    backend_result["category"] = "backend_runtime"
+    frontend_result = _run_frontend_tests(repo_root)
+    frontend_result["category"] = "frontend_runtime"
+    runs = [backend_result, frontend_result]
 
     total = len(runs)
     passed = sum(1 for r in runs if r.get("status") == "PASS")
@@ -1099,7 +1156,7 @@ def run_quality_snapshot(repo_root: str) -> dict:
         "pass_rate_pct": round((passed / considered) * 100, 1) if considered else 0.0,
         "checks": runs,
     }
-    for cat in ["runtime"]:
+    for cat in ["backend_runtime", "frontend_runtime"]:
         cat_checks = [r for r in runs if r.get("category") == cat]
         c_pass = sum(1 for r in cat_checks if r.get("status") == "PASS")
         c_fail = sum(1 for r in cat_checks if r.get("status") == "FAIL")
@@ -1107,8 +1164,8 @@ def run_quality_snapshot(repo_root: str) -> dict:
         snapshot[f"{cat}_summary"] = {"passed": c_pass, "failed": c_fail, "total": len(cat_checks)}
         snapshot[f"{cat}_pass_rate_pct"] = round((c_pass / c_considered) * 100, 1) if c_considered else 0.0
 
-    rt_passed_tests = int(pytest_result.get("passed_tests", 0))
-    rt_failed_tests = int(pytest_result.get("failed_tests", 0))
+    rt_passed_tests = int(backend_result.get("passed_tests", 0)) + int(frontend_result.get("passed_tests", 0))
+    rt_failed_tests = int(backend_result.get("failed_tests", 0)) + int(frontend_result.get("failed_tests", 0))
     rt_total_tests = rt_passed_tests + rt_failed_tests
     snapshot["runtime_tests_summary"] = {
         "passed_tests": rt_passed_tests,
@@ -1116,7 +1173,17 @@ def run_quality_snapshot(repo_root: str) -> dict:
         "total_tests": rt_total_tests,
     }
     snapshot["runtime_tests_pass_rate_pct"] = round((rt_passed_tests / rt_total_tests) * 100, 1) if rt_total_tests else 0.0
-    snapshot["coverage_pct"] = float(pytest_result.get("coverage_pct", 0.0))
+    snapshot["backend_coverage_pct"] = float(backend_result.get("coverage_pct", 0.0))
+    snapshot["frontend_coverage_pct"] = float(frontend_result.get("coverage_pct", 0.0))
+
+    backend_total = int(backend_result.get("total_lines", 0))
+    frontend_total = int(frontend_result.get("total_lines", 0))
+    backend_covered = int(backend_result.get("covered_lines", 0))
+    frontend_covered = int(frontend_result.get("covered_lines", 0))
+    app_total = backend_total + frontend_total
+    app_covered = backend_covered + frontend_covered
+    snapshot["application_coverage_pct"] = round((app_covered / app_total) * 100, 1) if app_total else 0.0
+    snapshot["coverage_pct"] = snapshot["application_coverage_pct"]
     return snapshot
 
 
@@ -1493,7 +1560,7 @@ with pm_tab:
 
 with quality_tab:
     st.markdown("### Quality")
-    st.caption("Run application tests with coverage.")
+    st.caption("Run backend (pytest) and frontend (vitest) tests with real line coverage for 03_application.")
 
     history = load_quality_history()
     q1, q2, q3 = st.columns([1, 1, 2])
@@ -1516,10 +1583,14 @@ with quality_tab:
 
     latest = history[-1] if history else None
     runtime_rate = latest.get("runtime_tests_pass_rate_pct", 0.0) if latest else None
-    coverage_rate = latest.get("coverage_pct", 0.0) if latest else None
-    kq1, kq2 = st.columns(2)
+    coverage_rate = latest.get("application_coverage_pct", 0.0) if latest else None
+    backend_cov = latest.get("backend_coverage_pct", 0.0) if latest else None
+    frontend_cov = latest.get("frontend_coverage_pct", 0.0) if latest else None
+    kq1, kq2, kq3, kq4 = st.columns(4)
     kq1.metric("Runtime Test Pass Rate", f"{runtime_rate:.1f}%" if runtime_rate is not None else "N/A")
-    kq2.metric("Coverage", f"{coverage_rate:.1f}%" if coverage_rate is not None else "N/A")
+    kq2.metric("Application Coverage", f"{coverage_rate:.1f}%" if coverage_rate is not None else "N/A")
+    kq3.metric("Backend Coverage", f"{backend_cov:.1f}%" if backend_cov is not None else "N/A")
+    kq4.metric("Frontend Coverage", f"{frontend_cov:.1f}%" if frontend_cov is not None else "N/A")
 
     g1, g2 = st.columns(2)
     with g1:
