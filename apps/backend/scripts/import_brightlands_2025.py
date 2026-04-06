@@ -26,8 +26,9 @@ from app.services.environment_service import infer_sync_end_date, infer_sync_sta
 from app.services.inference_service import InferenceService
 from app.utils.geo import assign_grid_codes, polygon_area_m2
 
-FIELD_ID = 'field-brightlands-campus-2025'
-FIELD_NAME = 'Brightlands Campus SWD Monitoring 2025'
+DEFAULT_FIELD_ID = 'field-brightlands-history-2025'
+DEFAULT_FIELD_NAME = 'Brightlands History 2025'
+DEFAULT_OUTPUT_SUBDIR = 'brightlands_history_2025_import'
 
 # Approximate Brightlands Campus Greenport (Venlo) bounding polygon.
 POLYGON = [
@@ -116,25 +117,25 @@ def build_trap_grid() -> list[tuple[float, float]]:
     return coords
 
 
-def ensure_field_and_traps(db: Session, owner_user: User) -> list[TrapPoint]:
-    field = db.query(FieldMap).filter(FieldMap.id == FIELD_ID).first()
+def ensure_field_and_traps(db: Session, owner_user: User, field_id: str, field_name: str) -> list[TrapPoint]:
+    field = db.query(FieldMap).filter(FieldMap.id == field_id).first()
     if field is None:
         area_m2 = polygon_area_m2([(point['lat'], point['lng']) for point in POLYGON])
         field = FieldMap(
-            id=FIELD_ID,
+            id=field_id,
             owner_user_id=owner_user.id,
-            name=FIELD_NAME,
+            name=field_name,
             polygon_geojson=json.dumps(POLYGON),
             area_m2=area_m2,
         )
         db.add(field)
         db.flush()
 
-    traps = db.query(TrapPoint).filter(TrapPoint.field_id == FIELD_ID).order_by(TrapPoint.row_index, TrapPoint.position_index).all()
+    traps = db.query(TrapPoint).filter(TrapPoint.field_id == field_id).order_by(TrapPoint.row_index, TrapPoint.position_index).all()
     if len(traps) == 20:
         return traps
 
-    existing_upload_count = db.query(TrapUpload).filter(TrapUpload.field_id == FIELD_ID).count()
+    existing_upload_count = db.query(TrapUpload).filter(TrapUpload.field_id == field_id).count()
     if existing_upload_count > 0 and len(traps) != 20:
         raise RuntimeError('Field exists with uploads but trap count is not 20; refusing destructive trap reset.')
 
@@ -147,7 +148,7 @@ def ensure_field_and_traps(db: Session, owner_user: User) -> list[TrapPoint]:
         traps.append(
             TrapPoint(
                 id=f'trap-{uuid4().hex[:16]}',
-                field_id=FIELD_ID,
+                field_id=field_id,
                 code='PENDING',
                 custom_name=None,
                 latitude=lat,
@@ -169,14 +170,21 @@ def ensure_field_and_traps(db: Session, owner_user: User) -> list[TrapPoint]:
         trap.custom_name = f'{code}'
 
     db.commit()
-    return db.query(TrapPoint).filter(TrapPoint.field_id == FIELD_ID).order_by(TrapPoint.row_index, TrapPoint.position_index).all()
+    return db.query(TrapPoint).filter(TrapPoint.field_id == field_id).order_by(TrapPoint.row_index, TrapPoint.position_index).all()
 
 
 def _safe_name(value: str) -> str:
     return ''.join(char if char.isalnum() or char in {'-', '_'} else '-' for char in value)
 
 
-def import_dataset(source_root: Path, limit: int | None = None, seed: int = 2025) -> None:
+def import_dataset(
+    source_root: Path,
+    field_id: str,
+    field_name: str,
+    output_subdir: str,
+    limit: int | None = None,
+    seed: int = 2025,
+) -> None:
     settings = get_settings()
     uploads_root = Path(settings.upload_dir).resolve()
     infer = InferenceService()
@@ -194,7 +202,7 @@ def import_dataset(source_root: Path, limit: int | None = None, seed: int = 2025
         if owner_user is None:
             raise RuntimeError(f'Admin user not found: {settings.admin_email.lower()}')
 
-        traps = ensure_field_and_traps(db, owner_user)
+        traps = ensure_field_and_traps(db, owner_user, field_id=field_id, field_name=field_name)
         graph.initialize()
         graph.ensure_user_node(owner_user.id, owner_user.email, owner_user.full_name)
 
@@ -205,14 +213,14 @@ def import_dataset(source_root: Path, limit: int | None = None, seed: int = 2025
             trap = traps[idx % len(traps)]
             side = rng.choice(['A', 'B'])
             day_folder = row.capture_date.isoformat()
-            output_dir = uploads_root / 'brightlands_2025_import' / day_folder
+            output_dir = uploads_root / output_subdir / day_folder
             output_filename = f'{day_folder}_{_safe_name(row.path.stem)}.jpg'
             output_path = output_dir / output_filename
 
             existing_upload = (
                 db.query(TrapUpload)
                 .filter(
-                    TrapUpload.field_id == FIELD_ID,
+                    TrapUpload.field_id == field_id,
                     TrapUpload.image_path == str(output_path),
                     TrapUpload.capture_date == row.capture_date,
                 )
@@ -230,7 +238,7 @@ def import_dataset(source_root: Path, limit: int | None = None, seed: int = 2025
                 trap_code = f'{trap.custom_name or trap.code}-S{side}'
                 upload = TrapUpload(
                     user_id=owner_user.id,
-                    field_id=FIELD_ID,
+                    field_id=field_id,
                     trap_id=trap.id,
                     trap_code=trap_code,
                     capture_date=row.capture_date,
@@ -256,7 +264,7 @@ def import_dataset(source_root: Path, limit: int | None = None, seed: int = 2025
                     )
 
                 db.commit()
-                graph.link_upload_to_field(FIELD_ID, upload.id, upload.capture_date, upload.detection_count)
+                graph.link_upload_to_field(field_id, upload.id, upload.capture_date, upload.detection_count)
                 created += 1
             except Exception as exc:  # noqa: BLE001
                 db.rollback()
@@ -264,10 +272,10 @@ def import_dataset(source_root: Path, limit: int | None = None, seed: int = 2025
                 print(f'FAILED: {row.path} ({exc})')
 
         # Ensure all upload dates for this field have environmental data.
-        sync_start = infer_sync_start_date(db, FIELD_ID)
-        sync_end = infer_sync_end_date(db, FIELD_ID)
+        sync_start = infer_sync_start_date(db, field_id)
+        sync_end = infer_sync_end_date(db, field_id)
         if sync_start is not None and sync_end is not None:
-            field = db.query(FieldMap).filter(FieldMap.id == FIELD_ID).first()
+            field = db.query(FieldMap).filter(FieldMap.id == field_id).first()
             if field is not None:
                 sync_environment_for_field(db, field, sync_start, sync_end)
 
@@ -275,8 +283,8 @@ def import_dataset(source_root: Path, limit: int | None = None, seed: int = 2025
     print(
         json.dumps(
             {
-                'field_id': FIELD_ID,
-                'field_name': FIELD_NAME,
+                'field_id': field_id,
+                'field_name': field_name,
                 'source_root': str(source_root),
                 'created_uploads': created,
                 'skipped_existing': skipped,
@@ -288,12 +296,20 @@ def import_dataset(source_root: Path, limit: int | None = None, seed: int = 2025
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description='Import Brightlands 2025 trap images into SWD backend')
+    parser = argparse.ArgumentParser(description='Import Brightlands trap images into SWD backend')
     parser.add_argument(
         '--source',
         type=Path,
         default=Path('/Users/louis.ferger-andrews/Desktop/2025'),
-        help='Root directory with dated folders (default: /Users/louis.ferger-andrews/Desktop/2025)',
+        help='Root directory with dated folders (default: /Users/louis.ferger-andrews/Desktop/2025).',
+    )
+    parser.add_argument('--field-id', type=str, default=DEFAULT_FIELD_ID, help='Target FieldMap.id to import into.')
+    parser.add_argument('--field-name', type=str, default=DEFAULT_FIELD_NAME, help='Target FieldMap.name to import into.')
+    parser.add_argument(
+        '--output-subdir',
+        type=str,
+        default=DEFAULT_OUTPUT_SUBDIR,
+        help='Upload storage subdirectory name under backend UPLOAD_DIR.',
     )
     parser.add_argument('--limit', type=int, default=None, help='Optional max number of images to import')
     parser.add_argument('--seed', type=int, default=2025, help='Random seed for side A/B assignment')
@@ -305,7 +321,14 @@ def main() -> None:
     source = args.source.expanduser().resolve()
     if not source.exists():
         raise SystemExit(f'Source directory does not exist: {source}')
-    import_dataset(source_root=source, limit=args.limit, seed=args.seed)
+    import_dataset(
+        source_root=source,
+        field_id=args.field_id,
+        field_name=args.field_name,
+        output_subdir=args.output_subdir,
+        limit=args.limit,
+        seed=args.seed,
+    )
 
 
 if __name__ == '__main__':
