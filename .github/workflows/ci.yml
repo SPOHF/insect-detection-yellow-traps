@@ -24,19 +24,19 @@ jobs:
         with:
           node-version: "20.11.1"
           cache: "npm"
-          cache-dependency-path: apps/frontend/package-lock.json
+          cache-dependency-path: 03_application/frontend/package-lock.json
 
       - name: Backend compile checks
-        run: python -m compileall apps/backend/app src
+        run: python -m compileall 03_application/backend/app 04_modeling_experimental/src
 
       - name: Frontend build checks
-        working-directory: apps/frontend
+        working-directory: 03_application/frontend
         run: |
           npm ci
           npm run build
 
       - name: Build backend container
-        run: docker build -t swd-monitoring-backend:ci apps/backend
+        run: docker build -t swd-monitoring-backend:ci 03_application/backend
 
       - name: Build frontend container
-        run: docker build -t swd-monitoring-frontend:ci apps/frontend
+        run: docker build -t swd-monitoring-frontend:ci 03_application/frontend
