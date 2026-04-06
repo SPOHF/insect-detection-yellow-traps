@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: postgres:16
+    image: postgres:16.3
     container_name: swd_postgres
     restart: unless-stopped
     environment:
@@ -13,7 +13,7 @@ services:
       - postgres_data:/var/lib/postgresql/data
 
   neo4j:
-    image: neo4j:5.26
+    image: neo4j:5.26.0
     container_name: swd_neo4j
     restart: unless-stopped
     environment:
