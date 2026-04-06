@@ -4,6 +4,7 @@ from datetime import date
 from html import escape
 from pathlib import Path
 import re
+import logging
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy import and_, extract, func
@@ -18,9 +19,10 @@ from app.schemas.upload import DetectionResponse, UploadBatchResponse, UploadRes
 from app.services.graph_service import GraphService
 from app.services.environment_service import infer_sync_start_date, sync_environment_for_field
 from app.services.inference_service import InferenceService
-from app.services.upload_service import allocate_capture_dates, save_upload_file
+from app.services.upload_service import allocate_capture_dates, save_upload_file, validate_upload_file
 
 router = APIRouter(prefix='/api/analysis', tags=['analysis'])
+logger = logging.getLogger(__name__)
 
 
 @router.post('/upload-range', response_model=UploadBatchResponse)
@@ -69,66 +71,84 @@ def upload_range(
     graph = GraphService()
 
     results: list[UploadResult] = []
+    try:
+        for idx, file in enumerate(images):
+            try:
+                validate_upload_file(file)
+                saved_path = save_upload_file(upload_root, file)
+                detections = infer.run(saved_path)
+            except ValueError as exc:
+                logger.warning('Upload validation failed for user=%s file=%s: %s', current_user.id, file.filename, exc)
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    for idx, file in enumerate(images):
-        saved_path = save_upload_file(upload_root, file)
-        detections = infer.run(saved_path)
+            confidence_avg = sum(d['confidence'] for d in detections) / len(detections) if detections else 0.0
 
-        confidence_avg = sum(d['confidence'] for d in detections) / len(detections) if detections else 0.0
+            upload = TrapUpload(
+                user_id=current_user.id,
+                field_id=resolved_field_id,
+                trap_id=trap_id,
+                trap_code=resolved_trap_code,
+                capture_date=capture_dates[idx],
+                image_path=str(saved_path),
+                detection_count=len(detections),
+                confidence_avg=float(confidence_avg),
+            )
+            db.add(upload)
+            db.flush()
 
-        upload = TrapUpload(
-            user_id=current_user.id,
-            field_id=resolved_field_id,
-            trap_id=trap_id,
-            trap_code=resolved_trap_code,
-            capture_date=capture_dates[idx],
-            image_path=str(saved_path),
-            detection_count=len(detections),
-            confidence_avg=float(confidence_avg),
-        )
-        db.add(upload)
-        db.flush()
+            for detection in detections:
+                bbox = detection['bbox_xyxy']
+                db.add(
+                    Detection(
+                        upload_id=upload.id,
+                        class_id=detection['class_id'],
+                        confidence=detection['confidence'],
+                        x1=bbox[0],
+                        y1=bbox[1],
+                        x2=bbox[2],
+                        y2=bbox[3],
+                    )
+                )
 
-        for detection in detections:
-            bbox = detection['bbox_xyxy']
-            db.add(
-                Detection(
+            db.commit()
+            db.refresh(upload)
+
+            graph.link_upload_to_field(resolved_field_id, upload.id, upload.capture_date, upload.detection_count)
+
+            results.append(
+                UploadResult(
                     upload_id=upload.id,
-                    class_id=detection['class_id'],
-                    confidence=detection['confidence'],
-                    x1=bbox[0],
-                    y1=bbox[1],
-                    x2=bbox[2],
-                    y2=bbox[3],
+                    filename=file.filename or saved_path.name,
+                    field_id=resolved_field_id,
+                    trap_code=resolved_trap_code,
+                    capture_date=upload.capture_date,
+                    detection_count=upload.detection_count,
+                    confidence_avg=upload.confidence_avg,
+                    detections=[
+                        DetectionResponse(
+                            class_id=d['class_id'],
+                            confidence=d['confidence'],
+                            bbox_xyxy=d['bbox_xyxy'],
+                        )
+                        for d in detections
+                    ],
                 )
             )
-
-        db.commit()
-        db.refresh(upload)
-
-        graph.link_upload_to_field(resolved_field_id, upload.id, upload.capture_date, upload.detection_count)
-
-        results.append(
-            UploadResult(
-                upload_id=upload.id,
-                filename=file.filename or saved_path.name,
-                field_id=resolved_field_id,
-                trap_code=resolved_trap_code,
-                capture_date=upload.capture_date,
-                detection_count=upload.detection_count,
-                confidence_avg=upload.confidence_avg,
-                detections=[
-                    DetectionResponse(
-                        class_id=d['class_id'],
-                        confidence=d['confidence'],
-                        bbox_xyxy=d['bbox_xyxy'],
-                    )
-                    for d in detections
-                ],
-            )
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as exc:
+        db.rollback()
+        logger.exception(
+            'Upload ingestion failed user=%s field=%s trap=%s file_count=%s',
+            current_user.id,
+            resolved_field_id,
+            trap_id or resolved_trap_code,
+            len(images),
         )
-
-    graph.close()
+        raise HTTPException(status_code=500, detail='Upload processing failed due to internal error') from exc
+    finally:
+        graph.close()
 
     # Auto-backfill environmental data from oldest upload date for this field.
     try:
@@ -139,6 +159,7 @@ def upload_range(
                 sync_environment_for_field(db, field_for_env, auto_start, date.today())
     except Exception:
         # Do not fail image upload when environmental sync is unavailable.
+        logger.exception('Environmental sync failed for field=%s', resolved_field_id)
         pass
 
     return UploadBatchResponse(
