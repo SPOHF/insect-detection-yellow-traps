@@ -1,0 +1,36 @@
+[
+  {
+    "timestamp": "2026-04-06T23:07:06Z",
+    "total_checks": 1,
+    "passed_checks": 1,
+    "failed_checks": 0,
+    "pass_rate_pct": 100.0,
+    "checks": [
+      {
+        "name": "/Users/louis.ferger-andrews/insect-detection-yellow-traps/.venv/bin/python -m pytest -q 04_modeling_experimental/tests --cov=04_modeling_experimental/src --cov=03_application/backend/app --cov-report=term",
+        "status": "PASS",
+        "returncode": 0,
+        "stdout": "core/models/yolo.py                    14      0   100%\n04_modeling_experimental/src/cvcore/training/__init__.py               0      0   100%\n04_modeling_experimental/src/cvcore/training/optim.py                 10      0   100%\n04_modeling_experimental/src/cvcore/training/schedulers.py             7      0   100%\n04_modeling_experimental/src/cvcore/training/trainer.py                6      0   100%\n04_modeling_experimental/src/cvcore/utils/__init__.py                  0      0   100%\n04_modeling_experimental/src/cvcore/utils/config.py                    6      0   100%\n04_modeling_experimental/src/cvcore/utils/io.py                        3      0   100%\n04_modeling_experimental/src/cvcore/utils/logging.py                   3      1    67%\n04_modeling_experimental/src/cvcore/utils/reproducibility.py          26      6    77%\n04_modeling_experimental/src/data/__init__.py                          0      0   100%\n04_modeling_experimental/src/data/coco.py                             98      4    96%\n04_modeling_experimental/src/data/dataset.py                          21      0   100%\n04_modeling_experimental/src/data/exporters.py                        20      0   100%\n04_modeling_experimental/src/data/loaders.py                          12      0   100%\n04_modeling_experimental/src/data/masking.py                          37      3    92%\n04_modeling_experimental/src/eval/__init__.py                          0      0   100%\n04_modeling_experimental/src/eval/metrics.py                          10      0   100%\n04_modeling_experimental/src/utils/__init__.py                         0      0   100%\n04_modeling_experimental/src/utils/logging.py                         19     14    26%\n04_modeling_experimental/src/utils/repro.py                           20     15    25%\n--------------------------------------------------------------------------------------\nTOTAL                                                               2240   1263    44%\n41 passed, 1 skipped in 0.74s\n",
+        "stderr": "",
+        "label": "Runtime tests: pytest (04_modeling_experimental/tests)",
+        "passed_tests": 41,
+        "failed_tests": 0,
+        "coverage_pct": 44.0,
+        "category": "runtime"
+      }
+    ],
+    "runtime_summary": {
+      "passed": 1,
+      "failed": 0,
+      "total": 1
+    },
+    "runtime_pass_rate_pct": 100.0,
+    "runtime_tests_summary": {
+      "passed_tests": 41,
+      "failed_tests": 0,
+      "total_tests": 41
+    },
+    "runtime_tests_pass_rate_pct": 100.0,
+    "coverage_pct": 44.0
+  }
+]

@@ -1,0 +1,1556 @@
+import os
+import json
+import re
+import subprocess
+import sys
+from datetime import date, datetime, timedelta
+from typing import Optional
+
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
+import streamlit as st
+from dotenv import load_dotenv
+
+ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
+
+from src.data_loader import load_repository_data  # noqa: E402
+from src.metrics import cycle_metrics, overview_metrics  # noqa: E402
+from src.utils import apply_issue_filters, apply_pr_date_filter  # noqa: E402
+
+load_dotenv(os.path.join(ROOT_DIR, ".env"))
+
+st.set_page_config(page_title="SDLC Analytics Dashboard", layout="wide")
+
+st.markdown(
+    """
+    <style>
+      .sdlc-subtitle {color: #6b7280; margin-top: -0.2rem; margin-bottom: 0.8rem;}
+      .sdlc-panel {
+        border: 1px solid #e5e7eb;
+        border-radius: 12px;
+        padding: 0.7rem 1rem;
+        background: #fcfcfd;
+        margin-bottom: 0.8rem;
+      }
+      .sdlc-detail {
+        border: 1px solid #e5e7eb;
+        border-radius: 12px;
+        padding: 0.8rem 1rem;
+        background: #ffffff;
+      }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+st.markdown("## SDLC Analytics Dashboard")
+st.markdown(
+    "<p class='sdlc-subtitle'>Software delivery life cycle visibility across Project Management and Deployment.</p>",
+    unsafe_allow_html=True,
+)
+
+COSMIC_PURPLE = "#673366"
+COSMIC_PALETTE = ["#673366", "#835281", "#9C729A", "#B796B7", "#D2BDD2"]
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def fetch_data(owner: str, repo: str, token: str):
+    return load_repository_data(owner=owner, repo=repo, token=token)
+
+
+def fmt_days(value: float) -> str:
+    return "N/A" if pd.isna(value) else f"{value:.1f} days"
+
+
+def fmt_pct(value: float) -> str:
+    return "N/A" if pd.isna(value) else f"{value:.1f}%"
+
+
+def _apply_brand_style(fig: go.Figure) -> go.Figure:
+    fig.update_layout(
+        template="plotly_white",
+        paper_bgcolor="white",
+        plot_bgcolor="white",
+        font=dict(color="#2F1F2E"),
+    )
+    for idx, trace in enumerate(fig.data):
+        color = COSMIC_PALETTE[idx % len(COSMIC_PALETTE)]
+        ttype = getattr(trace, "type", "")
+        if ttype in {"bar", "histogram"}:
+            trace.marker.color = color
+        elif ttype in {"scatter"}:
+            trace.line.color = color
+            trace.marker.color = color
+        elif ttype in {"pie"}:
+            if hasattr(trace, "labels") and trace.labels is not None:
+                n = len(trace.labels)
+                trace.marker.colors = [COSMIC_PALETTE[i % len(COSMIC_PALETTE)] for i in range(n)]
+            else:
+                trace.marker.colors = COSMIC_PALETTE
+    return fig
+
+
+def render_chart(fig: go.Figure, key: str, brand_style: bool = True) -> Optional[object]:
+    if brand_style:
+        fig = _apply_brand_style(fig)
+    return st.plotly_chart(fig, key=key, width="stretch", on_select="rerun")
+
+
+def issue_state_pie(issues_df: pd.DataFrame) -> go.Figure:
+    if issues_df.empty:
+        fig = go.Figure()
+        fig.update_layout(title="Issue State Distribution")
+        return fig
+    counts = issues_df.groupby("state").size().reset_index(name="count")
+    return px.pie(counts, names="state", values="count", hole=0.45, title="Issue State Distribution")
+
+
+def milestone_completion_bar(milestones_df: pd.DataFrame) -> go.Figure:
+    if milestones_df.empty:
+        fig = go.Figure()
+        fig.update_layout(title="Milestone Completion")
+        return fig
+
+    data = milestones_df.copy()
+    total = data["open_issues"].fillna(0) + data["closed_issues"].fillna(0)
+    data["completion_pct"] = ((data["closed_issues"].fillna(0) / total) * 100).fillna(0)
+    data = data.sort_values("completion_pct", ascending=False)
+    return px.bar(data, x="title", y="completion_pct", title="Milestone Completion (%)")
+
+
+def weekly_issue_throughput(issues_df: pd.DataFrame) -> go.Figure:
+    if issues_df.empty:
+        fig = go.Figure()
+        fig.update_layout(title="Weekly Issue Throughput")
+        return fig
+
+    opened = issues_df.dropna(subset=["created_at"]).copy()
+    opened["week"] = opened["created_at"].dt.tz_localize(None).dt.to_period("W").dt.start_time
+    opened = opened.groupby("week").size().reset_index(name="opened")
+
+    closed = issues_df.dropna(subset=["closed_at"]).copy()
+    closed["week"] = closed["closed_at"].dt.tz_localize(None).dt.to_period("W").dt.start_time
+    closed = closed.groupby("week").size().reset_index(name="closed")
+
+    trend = pd.merge(opened, closed, on="week", how="outer").fillna(0).sort_values("week")
+    if trend.empty:
+        fig = go.Figure()
+        fig.update_layout(title="Weekly Issue Throughput")
+        return fig
+
+    fig = go.Figure()
+    fig.add_bar(x=trend["week"], y=trend["opened"], name="Opened")
+    fig.add_bar(x=trend["week"], y=trend["closed"], name="Closed")
+    fig.update_layout(title="Weekly Issue Throughput", barmode="group", yaxis_title="Count")
+    return fig
+
+
+def _phase_window(today: date) -> tuple[pd.Timestamp, pd.Timestamp]:
+    start = pd.Timestamp(date(today.year, 2, 1), tz="UTC")
+    end = pd.Timestamp(date(today.year, 6, 30), tz="UTC")
+    return start, end
+
+
+def _delivery_window(
+    scope_issues: pd.DataFrame,
+    milestones_df: pd.DataFrame,
+    milestone_filter: str,
+) -> tuple[pd.Timestamp, pd.Timestamp]:
+    if milestone_filter == "All":
+        return _phase_window(date.today())
+
+    created_series = scope_issues.get("created_at", pd.Series(dtype="datetime64[ns, UTC]"))
+    start = created_series.min() if not scope_issues.empty and created_series.notna().any() else pd.Timestamp.now(tz="UTC")
+    end = created_series.max() if not scope_issues.empty and created_series.notna().any() else pd.Timestamp.now(tz="UTC")
+
+    if not milestones_df.empty and isinstance(milestone_filter, str) and milestone_filter not in {"All", "No milestone"}:
+        match = milestones_df[milestones_df["title"] == milestone_filter]
+        if not match.empty and pd.notna(match.iloc[0].get("due_on")):
+            selected_due = match.iloc[0]["due_on"]
+            end = selected_due
+
+            # Sequential assumption:
+            # milestone N starts when milestone N-1 is due/finished.
+            dated = milestones_df.dropna(subset=["due_on"]).sort_values("due_on").copy()
+            earlier = dated[dated["due_on"] < selected_due]
+            if not earlier.empty:
+                prev_due = earlier.iloc[-1]["due_on"]
+                start = prev_due + pd.Timedelta(days=1)
+
+    if pd.isna(start):
+        start = pd.Timestamp.now(tz="UTC")
+    if pd.isna(end):
+        end = pd.Timestamp.now(tz="UTC")
+    if start > end:
+        start, end = end, start
+    return start, end
+
+
+def _planned_vs_actual(
+    scope_issues: pd.DataFrame,
+    issue_type: str,
+    window_start: pd.Timestamp,
+    window_end: pd.Timestamp,
+    as_of: pd.Timestamp,
+) -> dict[str, float]:
+    if scope_issues.empty:
+        return {"total": 0, "done_total": 0, "expected_now": 0, "done_now": 0}
+
+    data = scope_issues.copy()
+    data = data[~data.apply(_is_duplicate_or_wontfix_issue, axis=1)].copy()
+    data["issue_type"] = data.apply(_infer_issue_type, axis=1)
+    data = data[data["issue_type"] == issue_type].copy()
+    if data.empty:
+        return {"total": 0, "done_total": 0, "expected_now": 0, "done_now": 0}
+
+    total = len(data)
+    done_total = int((data["state"].str.lower() == "closed").sum())
+
+    total_days = max((window_end - window_start).days, 1)
+    elapsed_days = (min(max(as_of, window_start), window_end) - window_start).days
+    elapsed_ratio = max(0.0, min(1.0, elapsed_days / total_days))
+    expected_now = int(round(total * elapsed_ratio))
+
+    done_now = int(
+        (
+            (data["state"].str.lower() == "closed")
+            & (data["closed_at"].notna())
+            & (data["closed_at"] <= as_of)
+        ).sum()
+    )
+    return {
+        "total": int(total),
+        "done_total": int(done_total),
+        "expected_now": int(expected_now),
+        "done_now": int(done_now),
+    }
+
+
+def _hierarchy_level(row: pd.Series) -> str:
+    issue_type = _infer_issue_type(row)
+    return issue_type if issue_type in {"epic", "feature", "task"} else "other"
+
+
+def hierarchy_completion_chart(scope_issues: pd.DataFrame) -> go.Figure:
+    if scope_issues.empty:
+        fig = go.Figure()
+        fig.update_layout(title="Hierarchy Completion by Level")
+        return fig
+    data = scope_issues.copy()
+    data = data[~data.apply(_is_duplicate_or_wontfix_issue, axis=1)].copy()
+    data["level"] = data.apply(_hierarchy_level, axis=1)
+    data = data[data["level"].isin(["epic", "feature", "task"])].copy()
+    if data.empty:
+        fig = go.Figure()
+        fig.update_layout(title="Hierarchy Completion by Level")
+        return fig
+
+    rows = []
+    for level in ["epic", "feature", "task"]:
+        subset = data[data["level"] == level]
+        total = len(subset)
+        done = int((subset["state"].str.lower() == "closed").sum()) if total else 0
+        rows.append({"level": level.title(), "Done": done, "Remaining": max(total - done, 0)})
+    plot_df = pd.DataFrame(rows)
+    fig = go.Figure()
+    fig.add_bar(x=plot_df["level"], y=plot_df["Done"], name="Done", marker_color="#6A3A6A")
+    fig.add_bar(x=plot_df["level"], y=plot_df["Remaining"], name="Remaining", marker_color="#D9C9D9")
+    fig.update_layout(title="Hierarchy Completion by Level", barmode="stack", yaxis_title="Items")
+    return fig
+
+
+def hierarchy_status_mix_chart(scope_issues: pd.DataFrame) -> go.Figure:
+    if scope_issues.empty:
+        fig = go.Figure()
+        fig.update_layout(title="Status Mix by Hierarchy Level")
+        return fig
+    data = scope_issues.copy()
+    data = data[~data.apply(_is_duplicate_or_wontfix_issue, axis=1)].copy()
+    data["level"] = data.apply(_hierarchy_level, axis=1)
+    data = data[data["level"].isin(["epic", "feature", "task"])].copy()
+    if data.empty:
+        fig = go.Figure()
+        fig.update_layout(title="Status Mix by Hierarchy Level")
+        return fig
+    data["status"] = data.apply(_progress_status, axis=1)
+
+    rows = []
+    for level in ["epic", "feature", "task"]:
+        subset = data[data["level"] == level]
+        total = len(subset)
+        if total == 0:
+            continue
+        for status in ["backlog", "in_progress", "done"]:
+            count = int((subset["status"] == status).sum())
+            rows.append({"level": level.title(), "status": status, "pct": (count / total) * 100})
+    mix_df = pd.DataFrame(rows)
+    if mix_df.empty:
+        fig = go.Figure()
+        fig.update_layout(title="Status Mix by Hierarchy Level")
+        return fig
+
+    color_map = {"backlog": "#D9C9D9", "in_progress": "#A86CA8", "done": "#673366"}
+    fig = px.bar(
+        mix_df,
+        x="level",
+        y="pct",
+        color="status",
+        title="Status Mix by Hierarchy Level (%)",
+        color_discrete_map=color_map,
+    )
+    fig.update_layout(barmode="stack", yaxis_title="Percent")
+    return fig
+
+
+def phase_burnup_chart(scope_issues: pd.DataFrame, phase_start: pd.Timestamp, phase_end: pd.Timestamp) -> go.Figure:
+    if scope_issues.empty:
+        fig = go.Figure()
+        fig.update_layout(title="Phase Burn-up (Feb-Jun)")
+        return fig
+    data = scope_issues.copy()
+    data = data[~data.apply(_is_duplicate_or_wontfix_issue, axis=1)].copy()
+    data = data[data["closed_at"].notna()].copy()
+    if data.empty:
+        fig = go.Figure()
+        fig.update_layout(title="Phase Burn-up (Feb-Jun)")
+        return fig
+
+    phase = data[(data["closed_at"] >= phase_start) & (data["closed_at"] <= phase_end + pd.Timedelta(days=1))].copy()
+    if phase.empty:
+        fig = go.Figure()
+        fig.update_layout(title="Phase Burn-up (Feb-Jun)")
+        return fig
+    phase["month"] = phase["closed_at"].dt.tz_convert("UTC").dt.to_period("M").dt.to_timestamp()
+    monthly = phase.groupby("month").size().reset_index(name="completed")
+    monthly = monthly.sort_values("month")
+    monthly["cumulative"] = monthly["completed"].cumsum()
+    total_scope = max(len(scope_issues[~scope_issues.apply(_is_duplicate_or_wontfix_issue, axis=1)]), 1)
+    monthly["target"] = monthly["month"].apply(
+        lambda m: max(
+            0.0,
+            min(
+                float(total_scope),
+                ((m.tz_localize("UTC") - phase_start).days / max((phase_end - phase_start).days, 1)) * total_scope,
+            ),
+        )
+    )
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=monthly["month"], y=monthly["cumulative"], mode="lines+markers", name="Completed"))
+    fig.add_trace(
+        go.Scatter(
+            x=monthly["month"],
+            y=monthly["target"],
+            mode="lines",
+            name="Linear target",
+            line=dict(dash="dash"),
+        )
+    )
+    fig.update_layout(title="Phase Burn-up (Feb-Jun)", yaxis_title="Cumulative completed items")
+    return fig
+
+
+def phase_progress_chart(time_elapsed_pct: float, work_completed_pct: float) -> go.Figure:
+    fig = go.Figure()
+    fig.add_bar(x=["Time elapsed", "Work completed"], y=[time_elapsed_pct, work_completed_pct], marker_color=COSMIC_PALETTE[:2])
+    fig.update_layout(title="Phase Progress Balance (Feb-Jun)", yaxis_title="Percent", yaxis_range=[0, 100])
+    return fig
+
+
+def milestone_plan_position_chart(
+    expected_pct: float,
+    actual_pct: float,
+    phase_start: pd.Timestamp,
+    phase_end: pd.Timestamp,
+) -> go.Figure:
+    exp = max(0.0, min(100.0, float(expected_pct)))
+    act = max(0.0, min(100.0, float(actual_pct)))
+    delta = act - exp
+    gap_color = "#16A34A" if delta >= 0 else "#DC2626"
+    gap_label_prefix = "Ahead" if delta >= 0 else "Behind"
+
+    fig = go.Figure()
+    # Thin baseline timeline (bottom)
+    fig.add_shape(
+        type="line",
+        x0=0,
+        x1=100,
+        y0=0.18,
+        y1=0.18,
+        line=dict(color="#6B7280", width=2),
+    )
+    # Gap between expected and actual on timeline
+    fig.add_shape(
+        type="line",
+        x0=min(exp, act),
+        x1=max(exp, act),
+        y0=0.18,
+        y1=0.18,
+        line=dict(color=gap_color, width=6),
+    )
+    # Expected marker on timeline
+    fig.add_trace(
+        go.Scatter(
+            x=[exp],
+            y=[0.18],
+            mode="markers+text",
+            marker=dict(size=11, color="#111827"),
+            text=["Should be now"],
+            textposition="top center",
+            hoverinfo="skip",
+            showlegend=False,
+        )
+    )
+    # Actual marker on timeline
+    fig.add_trace(
+        go.Scatter(
+            x=[act],
+            y=[0.18],
+            mode="markers+text",
+            marker=dict(size=13, color="#673366"),
+            text=["We are"],
+            textposition="bottom center",
+            hoverinfo="skip",
+            showlegend=False,
+        )
+    )
+
+    # Two bars above timeline
+    fig.add_shape(type="rect", x0=0, x1=exp, y0=0.56, y1=0.70, line=dict(width=0), fillcolor="#D9C9D9")
+    fig.add_shape(type="rect", x0=0, x1=act, y0=0.76, y1=0.90, line=dict(width=0), fillcolor="#673366")
+
+    fig.add_annotation(
+        x=0,
+        y=0.63,
+        text="Should be now",
+        showarrow=False,
+        xanchor="left",
+        font=dict(color="#374151", size=14),
+    )
+    fig.add_annotation(
+        x=0,
+        y=0.83,
+        text="We are",
+        showarrow=False,
+        xanchor="left",
+        font=dict(color="#FFFFFF", size=14),
+    )
+    fig.add_annotation(
+        x=max(act - 1.0, 1.5),
+        y=0.83,
+        text=f"{act:.1f}%",
+        showarrow=False,
+        xanchor="right",
+        font=dict(color="#FFFFFF", size=14),
+    )
+    fig.add_annotation(
+        x=max(exp - 1.0, 1.5),
+        y=0.63,
+        text=f"{exp:.1f}%",
+        showarrow=False,
+        xanchor="right",
+        font=dict(color="#111827", size=14),
+    )
+
+    fig.update_layout(
+        title="Plan vs Actual Position",
+        xaxis_title="",
+        yaxis_title="",
+        xaxis=dict(range=[0, 100], showgrid=False, showticklabels=False, zeroline=False),
+        yaxis=dict(visible=False, range=[0, 1]),
+        showlegend=False,
+        height=340,
+    )
+    fig.add_annotation(x=0, y=0.06, text=str(phase_start.date()), showarrow=False, xanchor="left", font=dict(size=13))
+    fig.add_annotation(x=100, y=0.06, text=str(phase_end.date()), showarrow=False, xanchor="right", font=dict(size=13))
+    fig.add_annotation(
+        x=(exp + act) / 2,
+        y=0.30,
+        text=f"{gap_label_prefix}: {abs(delta):.1f}%",
+        showarrow=False,
+        font=dict(color=gap_color, size=14),
+    )
+    return fig
+
+
+def completed_hierarchy_counts(scope_issues: pd.DataFrame) -> pd.DataFrame:
+    if scope_issues.empty:
+        return pd.DataFrame(columns=["level", "completed"])
+    data = scope_issues.copy()
+    data = data[~data.apply(_is_duplicate_or_wontfix_issue, axis=1)].copy()
+    data["issue_type"] = data.apply(_infer_issue_type, axis=1)
+    data = data[data["issue_type"].isin(["epic", "feature", "task"])].copy()
+    if data.empty:
+        return pd.DataFrame(columns=["level", "completed"])
+    done = data[data["state"].str.lower() == "closed"].copy()
+    rows = []
+    for level in ["epic", "feature", "task"]:
+        rows.append(
+            {
+                "level": level.title(),
+                "completed": int((done["issue_type"] == level).sum()),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def completed_hierarchy_chart(scope_issues: pd.DataFrame) -> go.Figure:
+    counts = completed_hierarchy_counts(scope_issues)
+    if counts.empty:
+        fig = go.Figure()
+        fig.update_layout(title="Completed Epics / Features / Tasks")
+        return fig
+    return px.bar(counts, x="level", y="completed", title="Completed Epics / Features / Tasks")
+
+
+def _average_completed_counts(all_issues: pd.DataFrame) -> pd.DataFrame:
+    if all_issues.empty:
+        return pd.DataFrame(columns=["level", "avg_completed"])
+    data = all_issues.copy()
+    data = data[~data.apply(_is_duplicate_or_wontfix_issue, axis=1)].copy()
+    data = data[data["milestone"].notna()].copy()
+    data["issue_type"] = data.apply(_infer_issue_type, axis=1)
+    data = data[data["issue_type"].isin(["epic", "feature", "task"])].copy()
+    data = data[data["state"].str.lower() == "closed"].copy()
+    if data.empty:
+        return pd.DataFrame(columns=["level", "avg_completed"])
+
+    grouped = data.groupby(["milestone", "issue_type"]).size().reset_index(name="completed")
+    pivot = grouped.pivot(index="milestone", columns="issue_type", values="completed").fillna(0)
+    for col in ["epic", "feature", "task"]:
+        if col not in pivot.columns:
+            pivot[col] = 0
+    avg = pivot[["epic", "feature", "task"]].mean().reset_index()
+    avg.columns = ["level", "avg_completed"]
+    avg["level"] = avg["level"].str.title()
+    return avg
+
+
+def hierarchy_vs_average_chart(
+    scope_issues: pd.DataFrame,
+    all_issues: pd.DataFrame,
+    scope_label: str,
+) -> go.Figure:
+    current = completed_hierarchy_counts(scope_issues)
+    avg = _average_completed_counts(all_issues)
+    if current.empty:
+        fig = go.Figure()
+        fig.update_layout(title="Completed Hierarchy vs Milestone Average")
+        return fig
+    merged = current.merge(avg, on="level", how="left").fillna(0)
+    fig = go.Figure()
+    fig.add_bar(x=merged["level"], y=merged["completed"], name=f"{scope_label} Completed")
+    fig.add_bar(x=merged["level"], y=merged["avg_completed"], name="Milestone Average Completed")
+    fig.update_layout(title="Completed Hierarchy vs Milestone Average", barmode="group", yaxis_title="Count")
+    return fig
+
+
+def _has_label(labels: list[str], name: str) -> bool:
+    return any(str(label).strip().lower() == name.lower() for label in labels)
+
+
+def _title_prefix(title: str) -> str:
+    match = re.match(r"\s*\[([^\]]+)\]", title or "")
+    return match.group(1).strip().lower() if match else ""
+
+
+def _clean_title(title: str) -> str:
+    return re.sub(r"^\s*(\[[^\]]+\]\s*)+", "", title or "").strip()
+
+
+def _infer_issue_type(row: pd.Series) -> str:
+    title = row.get("title", "") or ""
+    prefix = _title_prefix(title)
+
+    if prefix == "epic":
+        return "epic"
+    if prefix == "feature":
+        return "feature"
+    if prefix == "task":
+        return "task"
+    return "other"
+
+
+def _normalize_text(value: str) -> str:
+    return str(value or "").strip().lower().replace("-", "").replace("_", "").replace(" ", "")
+
+
+def _is_duplicate_or_wontfix_issue(row: pd.Series) -> bool:
+    labels = row.get("labels", [])
+    if not isinstance(labels, list):
+        labels = []
+    normalized_labels = {_normalize_text(label) for label in labels}
+    excluded_markers = {
+        "duplicate",
+        "wontfix",
+        "wontdo",
+        "invalid",
+        "notplanned",
+        "declined",
+    }
+    if normalized_labels & excluded_markers:
+        return True
+
+    state_reason = _normalize_text(row.get("state_reason", ""))
+    if state_reason in {"notplanned", "duplicate"}:
+        return True
+
+    return False
+
+
+def _is_active_hierarchy_issue(row: pd.Series) -> bool:
+    return str(row.get("state", "")).strip().lower() != "closed" and not _is_duplicate_or_wontfix_issue(row)
+
+
+def _extract_issue_refs(text: str) -> list[int]:
+    text = text or ""
+    hash_refs = re.findall(r"#(\d+)", text)
+    url_refs = re.findall(r"/issues/(\d+)", text)
+    combined = hash_refs + url_refs
+    unique = []
+    seen = set()
+    for ref in combined:
+        n = int(ref)
+        if n in seen:
+            continue
+        seen.add(n)
+        unique.append(n)
+    return unique
+
+
+def _token_set(text: str) -> set[str]:
+    words = re.findall(r"[a-zA-Z]{3,}", (text or "").lower())
+    stop = {
+        "the",
+        "and",
+        "for",
+        "with",
+        "that",
+        "this",
+        "from",
+        "into",
+        "workflow",
+        "implement",
+        "implementation",
+        "document",
+        "documentation",
+        "ensure",
+        "data",
+        "system",
+        "project",
+    }
+    return {w for w in words if w not in stop}
+
+
+def _similarity_score(a: set[str], b: set[str]) -> float:
+    if not a or not b:
+        return 0.0
+    inter = len(a & b)
+    union = len(a | b)
+    return inter / union if union else 0.0
+
+
+def _choose_parent(child_tokens: set[str], candidates: pd.DataFrame, milestone: Optional[str]) -> Optional[int]:
+    if candidates.empty:
+        return None
+
+    local = candidates
+    if milestone:
+        same_milestone = candidates[candidates["milestone"] == milestone]
+        if not same_milestone.empty:
+            local = same_milestone
+
+    best_number = None
+    best_score = -1.0
+    for _, row in local.iterrows():
+        score = _similarity_score(child_tokens, row["tokens"])
+        if score > best_score:
+            best_score = score
+            best_number = int(row["number"])
+
+    if best_score <= 0:
+        return None
+    return best_number
+
+
+def _normalize_labels(labels: list[str]) -> set[str]:
+    if not isinstance(labels, list):
+        return set()
+    return {str(l).strip().lower().replace("-", " ").replace("_", " ") for l in labels}
+
+
+def _progress_status(row: pd.Series) -> str:
+    if str(row.get("state", "")).strip().lower() == "closed":
+        return "done"
+    labels = _normalize_labels(row.get("labels", []))
+    if any(x in labels for x in {"in progress", "wip", "doing"}):
+        return "in_progress"
+    return "backlog"
+
+
+def _task_weight(row: pd.Series, use_size: bool) -> int:
+    if use_size:
+        return 1
+    return 1
+
+
+def _markdown_to_plain(text: str) -> str:
+    value = str(text or "")
+    value = re.sub(r"```[\s\S]*?```", " ", value)
+    value = re.sub(r"`([^`]*)`", r"\1", value)
+    value = re.sub(r"!\[[^\]]*\]\([^)]+\)", " ", value)
+    value = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", value)
+    value = re.sub(r"(^|\s)#{1,6}\s*", " ", value)
+    value = re.sub(r"[*_~>-]", " ", value)
+    value = re.sub(r"\s+", " ", value).strip()
+    return value
+
+
+def _short_description(text: str, limit: int = 280) -> str:
+    clean = _markdown_to_plain(text)
+    if not clean:
+        return "No description"
+    if len(clean) <= limit:
+        return clean
+    return clean[: limit - 1].rstrip() + "..."
+
+
+def _short_box_description(text: str) -> str:
+    clean = _markdown_to_plain(text)
+    if not clean:
+        return ""
+    return clean
+
+
+def _wrap_box_text(text: str, line_chars: int = 42) -> str:
+    clean = _short_box_description(text)
+    if not clean:
+        return "No description"
+    words = clean.split()
+    lines: list[str] = []
+    current: list[str] = []
+    current_len = 0
+    for word in words:
+        add_len = len(word) if not current else len(word) + 1
+        if current and current_len + add_len > line_chars:
+            lines.append(" ".join(current))
+            current = [word]
+            current_len = len(word)
+        else:
+            current.append(word)
+            current_len += add_len
+    if current:
+        lines.append(" ".join(current))
+    return "<br>".join(lines)
+
+
+def _build_progress_hierarchy(scope_issues: pd.DataFrame, use_size: bool, include_epics: bool) -> pd.DataFrame:
+    columns = [
+        "epic_label",
+        "feature_label",
+        "task_label",
+        "status",
+        "weight",
+        "kind",
+        "description",
+        "issue_number",
+        "body_markdown",
+    ]
+    if scope_issues.empty:
+        return pd.DataFrame(columns=columns)
+
+    work = scope_issues.copy()
+    work = work[~work.apply(_is_duplicate_or_wontfix_issue, axis=1)].copy()
+    work["issue_type"] = work.apply(_infer_issue_type, axis=1)
+    work["clean_title"] = work["title"].fillna("").apply(_clean_title)
+    work["refs"] = work["body"].fillna("").apply(_extract_issue_refs)
+    work["tokens"] = work["clean_title"].apply(_token_set)
+
+    epics = work[work["issue_type"] == "epic"].copy()
+    features = work[work["issue_type"] == "feature"].copy()
+    tasks = work[work["issue_type"] == "task"].copy()
+
+    epic_numbers = set(epics["number"].dropna().astype(int).tolist()) if not epics.empty else set()
+    feature_numbers = set(features["number"].dropna().astype(int).tolist()) if not features.empty else set()
+    task_numbers = set(tasks["number"].dropna().astype(int).tolist()) if not tasks.empty else set()
+
+    feature_to_epic: dict[int, int] = {}
+    for _, feature in features.iterrows():
+        fnum = int(feature["number"])
+        refs = [int(r) for r in feature.get("refs", []) if int(r) in epic_numbers]
+        if refs:
+            feature_to_epic[fnum] = min(refs)
+    for _, epic in epics.iterrows():
+        enum = int(epic["number"])
+        refs = [int(r) for r in epic.get("refs", []) if int(r) in feature_numbers]
+        for fnum in refs:
+            feature_to_epic.setdefault(fnum, enum)
+    if include_epics and not features.empty and not epics.empty:
+        for _, feature in features.iterrows():
+            fnum = int(feature["number"])
+            if fnum in feature_to_epic:
+                continue
+            milestone = feature.get("milestone") if pd.notna(feature.get("milestone")) else None
+            parent = _choose_parent(feature["tokens"], epics[["number", "tokens", "milestone"]], milestone)
+            if parent is not None:
+                feature_to_epic[fnum] = int(parent)
+
+    feature_to_tasks: dict[int, set[int]] = {int(n): set() for n in feature_numbers}
+    for _, feature in features.iterrows():
+        fnum = int(feature["number"])
+        refs = [int(r) for r in feature.get("refs", []) if int(r) in task_numbers]
+        feature_to_tasks.setdefault(fnum, set()).update(refs)
+    for _, task in tasks.iterrows():
+        tnum = int(task["number"])
+        refs = [int(r) for r in task.get("refs", []) if int(r) in feature_numbers]
+        for fnum in refs:
+            feature_to_tasks.setdefault(fnum, set()).add(tnum)
+    if not tasks.empty and not features.empty:
+        for _, task in tasks.iterrows():
+            tnum = int(task["number"])
+            linked = any(tnum in v for v in feature_to_tasks.values())
+            if linked:
+                continue
+            milestone = task.get("milestone") if pd.notna(task.get("milestone")) else None
+            parent = _choose_parent(task["tokens"], features[["number", "tokens", "milestone"]], milestone)
+            if parent is not None:
+                feature_to_tasks.setdefault(int(parent), set()).add(tnum)
+
+    feature_lookup = {int(r["number"]): r for _, r in features.iterrows()}
+    task_lookup = {int(r["number"]): r for _, r in tasks.iterrows()}
+    epic_lookup = {int(r["number"]): r for _, r in epics.iterrows()}
+
+    rows: list[dict] = []
+    assigned_tasks: set[int] = set()
+
+    for fnum in sorted(feature_lookup.keys()):
+        feature = feature_lookup[fnum]
+        epic_label = ""
+        if include_epics:
+            enum = feature_to_epic.get(fnum)
+            if enum and enum in epic_lookup:
+                erow = epic_lookup[enum]
+                epic_label = f"#{int(erow['number'])} {erow['clean_title']}"
+            else:
+                epic_label = "Unmapped Epic"
+
+        feature_label = f"#{fnum} {feature['clean_title']}"
+        child_tasks = sorted(feature_to_tasks.get(fnum, set()))
+
+        if child_tasks:
+            for tnum in child_tasks:
+                if tnum not in task_lookup:
+                    continue
+                trow = task_lookup[tnum]
+                assigned_tasks.add(tnum)
+                rows.append(
+                    {
+                        "epic_label": epic_label,
+                        "feature_label": feature_label,
+                        "task_label": f"#{tnum} {trow['clean_title']}",
+                        "status": _progress_status(trow),
+                        "weight": _task_weight(trow, use_size=use_size),
+                        "kind": "task",
+                        "description": _short_description(trow.get("body", "")),
+                        "issue_number": int(tnum),
+                        "body_markdown": str(trow.get("body", "") or ""),
+                    }
+                )
+        else:
+            rows.append(
+                {
+                    "epic_label": epic_label,
+                    "feature_label": feature_label,
+                    "task_label": "No linked task",
+                    "status": _progress_status(feature),
+                    "weight": 1,
+                    "kind": "feature_no_task",
+                    "description": _short_description(feature.get("body", "")),
+                    "issue_number": int(fnum),
+                    "body_markdown": str(feature.get("body", "") or ""),
+                }
+            )
+
+    for tnum in sorted(task_lookup.keys()):
+        if tnum in assigned_tasks:
+            continue
+        trow = task_lookup[tnum]
+        rows.append(
+            {
+                "epic_label": "Unmapped Epic" if include_epics else "",
+                "feature_label": "Unmapped Feature",
+                "task_label": f"#{tnum} {trow['clean_title']}",
+                "status": _progress_status(trow),
+                "weight": _task_weight(trow, use_size=use_size),
+                "kind": "task_orphan",
+                "description": _short_description(trow.get("body", "")),
+                "issue_number": int(tnum),
+                "body_markdown": str(trow.get("body", "") or ""),
+            }
+        )
+
+    return pd.DataFrame(rows, columns=columns)
+
+
+def progress_heatmap_chart(blocks_df: pd.DataFrame, title: str, include_epics: bool) -> go.Figure:
+    if blocks_df.empty:
+        fig = go.Figure()
+        fig.update_layout(title=title)
+        return fig
+    color_map = {
+        "done": "#86EFAC",
+        "in_progress": "#FDBA74",
+        "backlog": "#CBD5E1",
+    }
+    data = blocks_df.copy()
+    data["root"] = "Scope"
+    data["task_box_label"] = data["task_label"]
+    task_mask = data["kind"].isin(["task", "task_orphan"])
+    data.loc[task_mask, "task_box_label"] = data.loc[task_mask].apply(
+        lambda r: f"{r['task_label']}<br>Description:<br>{_wrap_box_text(r['body_markdown'])}",
+        axis=1,
+    )
+    path = ["root", "feature_label", "task_label"]
+    if include_epics:
+        path = ["root", "epic_label", "feature_label", "task_label"]
+    path = [p if p != "task_label" else "task_box_label" for p in path]
+
+    fig = px.treemap(
+        data,
+        path=path,
+        values="weight",
+            color="status",
+            color_discrete_map=color_map,
+            title=title,
+            custom_data=["kind", "weight", "status", "description", "issue_number", "body_markdown"],
+    )
+    fig.update_traces(
+        textinfo="label",
+        texttemplate="%{label}",
+        textfont=dict(size=16),
+        hoverinfo="skip",
+        hovertemplate=None,
+    )
+    fig.update_layout(
+        margin=dict(l=8, r=8, t=56, b=8),
+        height=680,
+    )
+    return fig
+
+
+def _extract_selected_task_customdata(selection: object) -> Optional[list]:
+    if selection is None:
+        return None
+    payload = selection
+    if hasattr(selection, "selection"):
+        payload = getattr(selection, "selection")
+    if hasattr(payload, "get"):
+        points = payload.get("points", [])
+    else:
+        points = getattr(payload, "points", [])
+    if not points:
+        return None
+    point = points[0]
+    if hasattr(point, "get"):
+        return point.get("customdata")
+    return getattr(point, "customdata", None)
+
+
+def choose_current_milestone(milestones_df: pd.DataFrame) -> Optional[str]:
+    if milestones_df.empty:
+        return None
+
+    open_milestones = milestones_df[milestones_df["state"].str.lower() == "open"].copy() if "state" in milestones_df.columns else milestones_df.copy()
+    if open_milestones.empty:
+        return None
+
+    open_milestones["due_rank"] = open_milestones["due_on"].fillna(pd.Timestamp.max.tz_localize("UTC"))
+    open_milestones = open_milestones.sort_values(["due_rank", "open_issues"], ascending=[True, False])
+    top = open_milestones.iloc[0]
+    return str(top.get("title")) if pd.notna(top.get("title")) else None
+
+
+QUALITY_HISTORY_PATH = os.path.join(ROOT_DIR, "quality_history.json")
+
+
+def _run_check(cmd: list[str], cwd: str) -> dict:
+    try:
+        result = subprocess.run(
+            cmd,
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=1200,
+            check=False,
+        )
+        return {
+            "name": " ".join(cmd),
+            "status": "PASS" if result.returncode == 0 else "FAIL",
+            "returncode": result.returncode,
+            "stdout": (result.stdout or "")[-2000:],
+            "stderr": (result.stderr or "")[-2000:],
+        }
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "name": " ".join(cmd),
+            "status": "FAIL",
+            "returncode": -1,
+            "stdout": "",
+            "stderr": str(exc),
+        }
+
+
+def _python_has_module(python_bin: str, module_name: str, cwd: str) -> bool:
+    check = subprocess.run(
+        [python_bin, "-c", f"import {module_name}"],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    return check.returncode == 0
+
+
+def _parse_pytest_counts(stdout: str, stderr: str) -> dict:
+    text = f"{stdout}\n{stderr}"
+    passed = 0
+    failed = 0
+    errors = 0
+    m = re.search(r"(\d+)\s+passed", text)
+    if m:
+        passed = int(m.group(1))
+    m = re.search(r"(\d+)\s+failed", text)
+    if m:
+        failed = int(m.group(1))
+    m = re.search(r"(\d+)\s+error", text)
+    if m:
+        errors = int(m.group(1))
+    return {"passed_tests": passed, "failed_tests": failed + errors}
+
+
+def _parse_coverage_pct(stdout: str, stderr: str) -> float:
+    text = f"{stdout}\n{stderr}"
+    match = re.search(r"TOTAL\s+\d+\s+\d+\s+(\d+)%", text)
+    if match:
+        return float(match.group(1))
+    return 0.0
+
+
+def _run_root_pytest(repo_root: str) -> dict:
+    backend_dir = os.path.join(repo_root, "03_application", "backend")
+    backend_venv_python = os.path.join(backend_dir, ".venv", "bin", "python")
+    root_venv_python = os.path.join(repo_root, ".venv", "bin", "python")
+
+    candidates = [backend_venv_python, root_venv_python, "python3"]
+    for py in candidates:
+        if py != "python3" and not os.path.exists(py):
+            continue
+        if _python_has_module(py, "pytest", repo_root):
+            result = _run_check(
+                [
+                    py,
+                    "-m",
+                    "pytest",
+                    "-q",
+                    "04_modeling_experimental/tests",
+                    "--cov=04_modeling_experimental/src",
+                    "--cov=03_application/backend/app",
+                    "--cov-report=term",
+                ],
+                repo_root,
+            )
+            result["label"] = "Runtime tests: pytest (04_modeling_experimental/tests)"
+            counts = _parse_pytest_counts(result.get("stdout", ""), result.get("stderr", ""))
+            result.update(counts)
+            result["coverage_pct"] = _parse_coverage_pct(result.get("stdout", ""), result.get("stderr", ""))
+            return result
+
+    return {
+        "label": "Runtime tests: pytest (04_modeling_experimental/tests)",
+        "name": "pytest not available",
+        "status": "FAIL",
+        "returncode": 1,
+        "passed_tests": 0,
+        "failed_tests": 0,
+        "coverage_pct": 0.0,
+        "stdout": "",
+        "stderr": "pytest is not installed in backend .venv, project .venv, or system python.",
+    }
+
+
+def run_quality_snapshot(repo_root: str) -> dict:
+    pytest_result = _run_root_pytest(repo_root)
+    pytest_result["category"] = "runtime"
+    runs = [pytest_result]
+
+    total = len(runs)
+    passed = sum(1 for r in runs if r.get("status") == "PASS")
+    failed = sum(1 for r in runs if r.get("status") == "FAIL")
+    considered = total
+    snapshot = {
+        "timestamp": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+        "total_checks": total,
+        "passed_checks": passed,
+        "failed_checks": failed,
+        "pass_rate_pct": round((passed / considered) * 100, 1) if considered else 0.0,
+        "checks": runs,
+    }
+    for cat in ["runtime"]:
+        cat_checks = [r for r in runs if r.get("category") == cat]
+        c_pass = sum(1 for r in cat_checks if r.get("status") == "PASS")
+        c_fail = sum(1 for r in cat_checks if r.get("status") == "FAIL")
+        c_considered = len(cat_checks)
+        snapshot[f"{cat}_summary"] = {"passed": c_pass, "failed": c_fail, "total": len(cat_checks)}
+        snapshot[f"{cat}_pass_rate_pct"] = round((c_pass / c_considered) * 100, 1) if c_considered else 0.0
+
+    rt_passed_tests = int(pytest_result.get("passed_tests", 0))
+    rt_failed_tests = int(pytest_result.get("failed_tests", 0))
+    rt_total_tests = rt_passed_tests + rt_failed_tests
+    snapshot["runtime_tests_summary"] = {
+        "passed_tests": rt_passed_tests,
+        "failed_tests": rt_failed_tests,
+        "total_tests": rt_total_tests,
+    }
+    snapshot["runtime_tests_pass_rate_pct"] = round((rt_passed_tests / rt_total_tests) * 100, 1) if rt_total_tests else 0.0
+    snapshot["coverage_pct"] = float(pytest_result.get("coverage_pct", 0.0))
+    return snapshot
+
+
+def load_quality_history() -> list[dict]:
+    if not os.path.exists(QUALITY_HISTORY_PATH):
+        return []
+    try:
+        with open(QUALITY_HISTORY_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, list):
+            return data
+        return []
+    except Exception:
+        return []
+
+
+def save_quality_history(history: list[dict]) -> None:
+    with open(QUALITY_HISTORY_PATH, "w", encoding="utf-8") as f:
+        json.dump(history, f, indent=2)
+
+
+def runtime_test_results_chart(history: list[dict]) -> go.Figure:
+    title = "Weekly Runtime Tests (Passed vs Failed)"
+    if not history:
+        fig = go.Figure()
+        fig.update_layout(title=title)
+        return fig
+
+    rows: list[dict] = []
+    for item in history:
+        ts = pd.to_datetime(item.get("timestamp"), utc=True, errors="coerce")
+        if pd.isna(ts):
+            continue
+        week = ts.tz_convert("UTC").to_period("W").start_time
+        summary = item.get("runtime_tests_summary", {}) or {}
+        passed = int(summary.get("passed_tests", 0))
+        failed = int(summary.get("failed_tests", 0))
+        total = passed + failed
+        pass_rate = (passed / total * 100.0) if total else 0.0
+        rows.append(
+            {
+                "week": week,
+                "passed": passed,
+                "failed": failed,
+                "total": total,
+                "pass_rate_pct": pass_rate,
+            }
+        )
+
+    df = pd.DataFrame(rows)
+    if df.empty:
+        fig = go.Figure()
+        fig.update_layout(title=title)
+        return fig
+
+    # Keep last snapshot per week.
+    df = df.sort_values("week").groupby("week", as_index=False).last()
+
+    fig = go.Figure()
+    fig.add_bar(
+        x=df["week"],
+        y=df["passed"],
+        name="Passed",
+        marker_color="#16A34A",
+        text=df["passed"].astype(str),
+        textposition="inside",
+    )
+    fig.add_bar(
+        x=df["week"],
+        y=df["failed"],
+        name="Failed",
+        marker_color="#DC2626",
+        text=df["failed"].astype(str),
+        textposition="inside",
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=df["week"],
+            y=df["total"],
+            mode="text",
+            text=[f"{v:.1f}% pass" for v in df["pass_rate_pct"]],
+            textposition="top center",
+            showlegend=False,
+            hoverinfo="skip",
+        )
+    )
+    fig.update_layout(title=title, barmode="stack")
+    fig.update_yaxes(title="Tests")
+    return fig
+
+
+def coverage_trend_chart(history: list[dict]) -> go.Figure:
+    title = "Weekly Test Coverage"
+    if not history:
+        fig = go.Figure()
+        fig.update_layout(title=title)
+        return fig
+    rows = []
+    for item in history[-12:]:
+        ts = pd.to_datetime(item.get("timestamp"), utc=True, errors="coerce")
+        rows.append({"timestamp": ts, "coverage_pct": float(item.get("coverage_pct", 0.0))})
+    df = pd.DataFrame(rows).dropna()
+    if df.empty:
+        fig = go.Figure()
+        fig.update_layout(title=title)
+        return fig
+    df["week"] = df["timestamp"].dt.tz_convert("UTC").dt.to_period("W").dt.start_time
+    df = df.sort_values("timestamp").groupby("week", as_index=False).last()
+    fig = px.bar(df, x="week", y="coverage_pct", title=title, text="coverage_pct")
+    fig.update_traces(texttemplate="%{text:.1f}%", textposition="outside")
+    fig.update_yaxes(range=[0, 100], title="Coverage (%)")
+    return fig
+
+
+def deployment_placeholder_chart(title: str) -> go.Figure:
+    fig = go.Figure()
+    fig.update_layout(title=title)
+    fig.add_annotation(
+        text="No deployment data yet",
+        x=0.5,
+        y=0.5,
+        xref="paper",
+        yref="paper",
+        showarrow=False,
+    )
+    return fig
+
+
+token = os.getenv("GITHUB_TOKEN", "")
+owner = os.getenv("GITHUB_OWNER", "")
+repo = os.getenv("GITHUB_REPO", "")
+
+if not token:
+    st.error("Set GITHUB_TOKEN in 02_pm_analytics_dashboard/.env.")
+    st.stop()
+if not owner or not repo:
+    st.error("Set GITHUB_OWNER and GITHUB_REPO in 02_pm_analytics_dashboard/.env.")
+    st.stop()
+
+header_left, header_right = st.columns([4, 1])
+with header_left:
+    st.caption(f"Repository: {owner}/{repo}")
+with header_right:
+    if st.button("Refresh Data", key="refresh_data_top"):
+        fetch_data.clear()
+
+try:
+    data = fetch_data(owner=owner, repo=repo, token=token)
+except Exception as exc:  # noqa: BLE001
+    st.error(f"Unable to load GitHub data: {exc}")
+    st.stop()
+
+issues_df = data["issues"]
+prs_df = data["pulls"]
+labels_df = data["labels"]
+milestones_df = data["milestones"]
+
+if issues_df.empty and prs_df.empty:
+    st.warning("No issue or PR data found for this repository.")
+    st.stop()
+
+pm_tab, quality_tab, deploy_tab = st.tabs(["Project Management", "Quality", "Deployment"])
+
+with pm_tab:
+    st.markdown("### Project Management")
+
+    current_milestone = choose_current_milestone(milestones_df)
+
+    min_date = date.today() - timedelta(days=180)
+    max_date = date.today()
+    if not issues_df.empty and issues_df["created_at"].notna().any():
+        min_date = issues_df["created_at"].min().date()
+        max_date = max(max_date, issues_df["created_at"].max().date())
+
+    f1, f2, f3, f4, f5 = st.columns(5)
+
+    milestone_options = ["Current milestone", "All", "No milestone"]
+    if not milestones_df.empty:
+        milestone_options += sorted(milestones_df["title"].dropna().unique().tolist())
+
+    with f1:
+        milestone_filter_raw = st.selectbox("Milestone", milestone_options, key="pm_filter_milestone")
+
+    with f2:
+        date_range = st.date_input(
+            "Date range (created_at)",
+            value=(min_date, max_date),
+            min_value=min_date,
+            max_value=max_date,
+            key="pm_filter_date_range",
+        )
+
+    if isinstance(date_range, tuple) and len(date_range) == 2:
+        start_date, end_date = date_range
+    else:
+        start_date, end_date = min_date, max_date
+
+    with f3:
+        label_options = ["All"]
+        if not labels_df.empty:
+            label_options += sorted(labels_df["name"].dropna().unique().tolist())
+        label_filter = st.selectbox("Label", label_options, key="pm_filter_label")
+
+    with f4:
+        issue_state = st.selectbox("Issue state", ["all", "open", "closed"], index=0, key="pm_filter_state")
+
+    with f5:
+        timeframe_mode = st.selectbox(
+            "Scope timeframe",
+            ["Full scope", "Until now"],
+            index=0,
+            key="pm_scope_timeframe",
+        )
+
+    milestone_filter = milestone_filter_raw
+    if milestone_filter_raw == "Current milestone":
+        if current_milestone:
+            milestone_filter = current_milestone
+            st.caption(f"Current milestone inferred as: {current_milestone}")
+        else:
+            milestone_filter = "All"
+            st.caption("No open milestone found. Falling back to All milestones.")
+
+    filtered_issues = apply_issue_filters(
+        issues_df,
+        start_date=start_date,
+        end_date=end_date,
+        assignee="All",
+        label=label_filter,
+        milestone=milestone_filter,
+        issue_state=issue_state,
+    )
+    filtered_prs = apply_pr_date_filter(prs_df, start_date=start_date, end_date=end_date)
+
+    pm_overview = overview_metrics(filtered_issues, filtered_prs, milestones_df)
+    pm_cycles = cycle_metrics(filtered_issues, filtered_prs)
+
+    k1, k2, k3, k4, k5, k6 = st.columns(6)
+    k1.metric("Open Issues", pm_overview["open_issues"])
+    k2.metric("Closed Issues", pm_overview["closed_issues"])
+    k3.metric("Open PRs", pm_overview["open_prs"])
+    k4.metric("Closed PRs", pm_overview["closed_prs"])
+    k5.metric("Avg Issue Close", fmt_days(pm_overview["avg_issue_close_days"]))
+    k6.metric("Avg Cycle Time", fmt_days(pm_cycles["avg_cycle_days"]))
+
+    use_size = True
+
+    include_epics = milestone_filter == "All"
+    heat_issues = filtered_issues.copy()
+    heat_title_scope = "Whole Project"
+    if milestone_filter == "No milestone":
+        heat_title_scope = "No Milestone"
+        include_epics = False
+    elif isinstance(milestone_filter, str) and milestone_filter not in {"All"}:
+        heat_title_scope = f"Milestone: {milestone_filter}"
+        include_epics = False
+
+    scope_issues = heat_issues.copy()
+    if timeframe_mode == "Until now":
+        now_utc = pd.Timestamp.now(tz="UTC")
+        scope_issues = scope_issues[scope_issues["created_at"].notna() & (scope_issues["created_at"] <= now_utc)].copy()
+
+    progress_blocks = _build_progress_hierarchy(
+        scope_issues,
+        use_size=use_size,
+        include_epics=include_epics,
+    )
+    total_weight = int(progress_blocks["weight"].sum()) if not progress_blocks.empty else 0
+    done_weight = int(progress_blocks.loc[progress_blocks["status"] == "done", "weight"].sum()) if not progress_blocks.empty else 0
+    completion_pct = (done_weight / total_weight * 100) if total_weight > 0 else 0.0
+    remaining_weight = max(total_weight - done_weight, 0)
+
+    phase_start, phase_end = _delivery_window(scope_issues, milestones_df, milestone_filter)
+    now_ts = pd.Timestamp.now(tz="UTC")
+    phase_total_days = max((phase_end - phase_start).days, 1)
+    elapsed_days = (min(max(now_ts, phase_start), phase_end) - phase_start).days
+    time_elapsed_pct = max(0.0, min(100.0, (elapsed_days / phase_total_days) * 100))
+    schedule_variance = completion_pct - time_elapsed_pct
+    feature_delivery = _planned_vs_actual(scope_issues, "feature", phase_start, phase_end, now_ts)
+    task_delivery = _planned_vs_actual(scope_issues, "task", phase_start, phase_end, now_ts)
+    expected_pct = time_elapsed_pct
+    actual_pct = completion_pct
+
+    st.markdown("### Key Delivery Insights")
+    i1, i2, i3, i4, i5 = st.columns(5)
+    i1.metric("Features Done", f"{feature_delivery['done_total']}/{feature_delivery['total']}")
+    i2.metric("Features Expected by Now", feature_delivery["expected_now"])
+    i3.metric("Tasks Done", f"{task_delivery['done_total']}/{task_delivery['total']}")
+    i4.metric("Tasks Expected by Now", task_delivery["expected_now"])
+    i5.metric("Schedule Variance", f"{schedule_variance:+.1f} pts")
+
+    st.markdown("### Milestone Plan Position")
+    st.caption("Shows where progress should be by now vs where it actually is, including extra completed tasks not yet required by plan.")
+    render_chart(
+        milestone_plan_position_chart(
+            expected_pct=expected_pct,
+            actual_pct=actual_pct,
+            phase_start=phase_start,
+            phase_end=phase_end,
+        ),
+        key="pm_milestone_plan_position",
+        brand_style=False,
+    )
+
+    st.markdown("### Delivery Progress Heatmap")
+    st.caption("Color legend: Backlog (grey), In Progress (orange), Done (green)")
+    st.caption("Whole project view shows Epic -> Feature -> Task. Milestone view shows Feature -> Task.")
+    heat_event = render_chart(
+        progress_heatmap_chart(
+            progress_blocks,
+            title=f"Progress Heatmap ({heat_title_scope})",
+            include_epics=include_epics,
+        ),
+        key="pm_progress_heatmap",
+        brand_style=False,
+    )
+    selected_custom = _extract_selected_task_customdata(heat_event)
+    if selected_custom and len(selected_custom) >= 6:
+        kind = str(selected_custom[0] or "")
+        issue_number = selected_custom[4]
+        body_markdown = str(selected_custom[5] or "").strip()
+        if kind in {"task", "task_orphan"} and issue_number:
+            st.markdown("#### Task Description")
+            st.caption(f"Issue #{int(issue_number)}")
+            st.markdown(body_markdown or "_No description provided._")
+
+    st.markdown("### Delivery Breakdown")
+    scope_label = "Whole Project" if milestone_filter == "All" else str(milestone_filter)
+    b1, b2 = st.columns(2)
+    with b1:
+        render_chart(completed_hierarchy_chart(scope_issues), key="pm_completed_hierarchy")
+    with b2:
+        st.markdown("#### Completed Hierarchy Counts")
+        st.dataframe(
+            completed_hierarchy_counts(scope_issues).rename(columns={"level": "Level", "completed": "Completed"}),
+            width="stretch",
+            hide_index=True,
+        )
+
+    c1, c2 = st.columns(2)
+    with c1:
+        render_chart(
+            hierarchy_vs_average_chart(
+                scope_issues,
+                issues_df,
+                scope_label=scope_label,
+            ),
+            key="pm_hierarchy_vs_average",
+        )
+    with c2:
+        render_chart(
+            phase_progress_chart(time_elapsed_pct=time_elapsed_pct, work_completed_pct=completion_pct),
+            key="pm_scope_progress_balance",
+        )
+
+    st.markdown("### Export")
+    issue_csv = filtered_issues.to_csv(index=False).encode("utf-8")
+    pr_csv = filtered_prs.to_csv(index=False).encode("utf-8")
+    x1, x2 = st.columns(2)
+    with x1:
+        st.download_button(
+            "Download filtered issues CSV",
+            issue_csv,
+            file_name="filtered_issues.csv",
+            key="pm_download_issues_csv",
+        )
+    with x2:
+        st.download_button(
+            "Download filtered PRs CSV",
+            pr_csv,
+            file_name="filtered_prs.csv",
+            key="pm_download_prs_csv",
+        )
+
+with quality_tab:
+    st.markdown("### Quality")
+    st.caption("Run application tests with coverage.")
+
+    history = load_quality_history()
+    q1, q2, q3 = st.columns([1, 1, 2])
+    with q1:
+        if st.button("Run Weekly Quality Snapshot", key="quality_run_snapshot"):
+            snapshot = run_quality_snapshot(os.path.abspath(os.path.join(ROOT_DIR, "..")))
+            history.append(snapshot)
+            save_quality_history(history)
+            st.success("Quality snapshot recorded.")
+    with q2:
+        if st.button("Clear Quality History", key="quality_clear_history"):
+            history = []
+            save_quality_history(history)
+            st.info("Quality history cleared.")
+    with q3:
+        if history:
+            st.caption(f"Latest snapshot: {history[-1].get('timestamp', 'N/A')}")
+        else:
+            st.caption("No quality snapshots yet.")
+
+    latest = history[-1] if history else None
+    runtime_rate = latest.get("runtime_tests_pass_rate_pct", 0.0) if latest else None
+    coverage_rate = latest.get("coverage_pct", 0.0) if latest else None
+    kq1, kq2 = st.columns(2)
+    kq1.metric("Runtime Test Pass Rate", f"{runtime_rate:.1f}%" if runtime_rate is not None else "N/A")
+    kq2.metric("Coverage", f"{coverage_rate:.1f}%" if coverage_rate is not None else "N/A")
+
+    g1, g2 = st.columns(2)
+    with g1:
+        render_chart(
+            runtime_test_results_chart(history),
+            key="quality_runtime_results",
+        )
+    with g2:
+        render_chart(
+            coverage_trend_chart(history),
+            key="quality_coverage_trend",
+        )
+
+with deploy_tab:
+    st.markdown("### Deployment")
+    st.caption("Deployment tracking is prepared; metrics will populate once environments are live.")
+
+    d1, d2, d3, d4 = st.columns(4)
+    d1.metric("Uptime (7d)", "N/A")
+    d2.metric("Incidents (30d)", "N/A")
+    d3.metric("MTTR", "N/A")
+    d4.metric("Crash Count (7d)", "N/A")
+
+    e1, e2 = st.columns(2)
+    with e1:
+        render_chart(deployment_placeholder_chart("Service Uptime Trend"), key="deploy_uptime_placeholder")
+    with e2:
+        render_chart(deployment_placeholder_chart("Incidents and Recovery Time"), key="deploy_incidents_placeholder")
+
+    e3, e4 = st.columns(2)
+    with e3:
+        render_chart(deployment_placeholder_chart("Deployment Frequency"), key="deploy_frequency_placeholder")
+    with e4:
+        render_chart(deployment_placeholder_chart("Deployment Success Rate"), key="deploy_success_placeholder")
