@@ -1086,7 +1086,7 @@ def _run_backend_tests(repo_root: str) -> dict:
                 "-m",
                 "pytest",
                 "-q",
-                "04_modeling_experimental/tests/backend",
+                "03_application/tests/backend",
                 "--cov=03_application/backend/app",
                 "--cov-report=term",
                 f"--cov-report=json:{backend_cov_json}",
