@@ -18,3 +18,10 @@ Object.defineProperty(globalThis, 'localStorage', {
   value: localStorageMock,
   configurable: true,
 });
+
+if (!globalThis.URL.createObjectURL) {
+  Object.defineProperty(globalThis.URL, 'createObjectURL', {
+    value: () => 'blob:mock',
+    configurable: true,
+  });
+}
