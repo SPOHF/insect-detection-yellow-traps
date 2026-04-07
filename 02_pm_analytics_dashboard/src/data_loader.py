@@ -1,9 +1,12 @@
+import logging
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
 from src.github_client import GitHubClient
 from src.utils import ensure_datetime
+
+logger = logging.getLogger(__name__)
 
 
 def _extract_label_names(labels: List[Dict[str, Any]]) -> List[str]:
@@ -171,20 +174,20 @@ def load_repository_data(owner: str, repo: str, token: str) -> Dict[str, pd.Data
         try:
             detail = client.get_pull(pr_number)
             pr_details_records.append(_normalize_pr_detail(detail))
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Failed to enrich PR details for #%s: %s", pr_number, exc)
         try:
             reviews = client.get_pull_reviews(pr_number)
             pr_reviews_records.extend([_normalize_pr_review(pr_number, r) for r in reviews])
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Failed to fetch PR reviews for #%s: %s", pr_number, exc)
         try:
             comments = client.get_pull_review_comments(pr_number)
             pr_record = next((x for x in pr_records if int(x.get("number", -1) or -1) == pr_number), None)
             if pr_record is not None:
                 pr_record["review_comments_count"] = len(comments)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Failed to fetch PR review comments for #%s: %s", pr_number, exc)
 
     for issue in issue_records[:max_issue_enrichment]:
         issue_number = int(issue.get("number", 0) or 0)
@@ -193,8 +196,8 @@ def load_repository_data(owner: str, repo: str, token: str) -> Dict[str, pd.Data
         try:
             events = client.get_issue_events(issue_number)
             issue_events_records.extend([_normalize_issue_event(issue_number, e) for e in events])
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Failed to fetch issue events for #%s: %s", issue_number, exc)
 
     issues_df = _to_dataframe(issue_records, ["created_at", "updated_at", "closed_at"])
     prs_df = _to_dataframe(pr_records, ["created_at", "updated_at", "closed_at", "merged_at"])
