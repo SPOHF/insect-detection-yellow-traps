@@ -3,6 +3,7 @@ import json
 import re
 import subprocess
 import sys
+import hmac
 from datetime import date, datetime, timedelta
 from typing import Optional
 
@@ -13,6 +14,7 @@ import streamlit as st
 from dotenv import load_dotenv
 
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.abspath(os.path.join(ROOT_DIR, ".."))
 if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
@@ -48,7 +50,7 @@ st.markdown(
 
 st.markdown("## SDLC Analytics Dashboard")
 st.markdown(
-    "<p class='sdlc-subtitle'>Software delivery life cycle visibility across Project Management and Deployment.</p>",
+    "<p class='sdlc-subtitle'>Software delivery life cycle visibility across Project Management, Quality, Deployment, and Architecture.</p>",
     unsafe_allow_html=True,
 )
 
@@ -67,6 +69,71 @@ def fmt_days(value: float) -> str:
 
 def fmt_pct(value: float) -> str:
     return "N/A" if pd.isna(value) else f"{value:.1f}%"
+
+
+def _get_config(name: str, default: str = "") -> str:
+    try:
+        if name in st.secrets:
+            return str(st.secrets[name])
+    except Exception:
+        pass
+    return str(os.getenv(name, default))
+
+
+def _get_config_bool(name: str, default: bool = False) -> bool:
+    raw = _get_config(name, "true" if default else "false").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _require_dashboard_access() -> None:
+    expected_key = _get_config("DASHBOARD_PASSKEY", "")
+    if not expected_key:
+        st.error("Dashboard access key is not configured. Set `DASHBOARD_PASSKEY` in environment/secrets.")
+        st.stop()
+
+    st.session_state.setdefault("dashboard_authenticated", False)
+    st.session_state.setdefault("dashboard_failed_attempts", 0)
+    st.session_state.setdefault("dashboard_lock_until", 0.0)
+
+    if st.session_state["dashboard_authenticated"]:
+        return
+
+    now_ts = datetime.utcnow().timestamp()
+    lock_until = float(st.session_state.get("dashboard_lock_until", 0.0) or 0.0)
+    if lock_until > now_ts:
+        remaining = int(lock_until - now_ts)
+        st.error(f"Too many failed attempts. Try again in {remaining}s.")
+        st.stop()
+
+    st.markdown("### Dashboard Access")
+    st.caption("Enter passkey to access this internal dashboard.")
+    with st.form("dashboard_access_form", clear_on_submit=False):
+        entered_key = st.text_input("Passkey", type="password", key="dashboard_passkey_input")
+        submitted = st.form_submit_button("Enter Dashboard")
+    if submitted:
+        if hmac.compare_digest(entered_key or "", expected_key):
+            st.session_state["dashboard_authenticated"] = True
+            st.session_state["dashboard_failed_attempts"] = 0
+            st.rerun()
+        else:
+            failures = int(st.session_state.get("dashboard_failed_attempts", 0)) + 1
+            st.session_state["dashboard_failed_attempts"] = failures
+            if failures >= 5:
+                st.session_state["dashboard_lock_until"] = datetime.utcnow().timestamp() + 60
+            st.error("Invalid passkey.")
+    st.stop()
+
+
+def _utc_series(series: pd.Series) -> pd.Series:
+    return pd.to_datetime(series, utc=True, errors="coerce")
+
+
+def _delta_days(end_series: pd.Series, start_series: pd.Series) -> pd.Series:
+    return (_utc_series(end_series) - _utc_series(start_series)).dt.total_seconds() / 86400.0
+
+
+def _delta_hours(end_series: pd.Series, start_series: pd.Series) -> pd.Series:
+    return (_utc_series(end_series) - _utc_series(start_series)).dt.total_seconds() / 3600.0
 
 
 def _apply_brand_style(fig: go.Figure) -> go.Figure:
@@ -180,6 +247,8 @@ def _delivery_window(
                 prev_due = earlier.iloc[-1]["due_on"]
                 start = prev_due + pd.Timedelta(days=1)
 
+    start = pd.to_datetime(start, utc=True, errors="coerce")
+    end = pd.to_datetime(end, utc=True, errors="coerce")
     if pd.isna(start):
         start = pd.Timestamp.now(tz="UTC")
     if pd.isna(end):
@@ -1312,9 +1381,561 @@ def deployment_placeholder_chart(title: str) -> go.Figure:
     return fig
 
 
-token = os.getenv("GITHUB_TOKEN", "")
-owner = os.getenv("GITHUB_OWNER", "")
-repo = os.getenv("GITHUB_REPO", "")
+def weekly_pr_throughput(prs_df: pd.DataFrame) -> go.Figure:
+    if prs_df.empty:
+        fig = go.Figure()
+        fig.update_layout(title="Weekly PR Throughput")
+        return fig
+    opened = prs_df.dropna(subset=["created_at"]).copy()
+    opened["week"] = opened["created_at"].dt.tz_localize(None).dt.to_period("W").dt.start_time
+    opened = opened.groupby("week").size().reset_index(name="opened")
+
+    merged = prs_df.dropna(subset=["merged_at"]).copy()
+    merged["week"] = merged["merged_at"].dt.tz_localize(None).dt.to_period("W").dt.start_time
+    merged = merged.groupby("week").size().reset_index(name="merged")
+
+    trend = pd.merge(opened, merged, on="week", how="outer").fillna(0).sort_values("week")
+    fig = go.Figure()
+    fig.add_bar(x=trend["week"], y=trend["opened"], name="Opened")
+    fig.add_bar(x=trend["week"], y=trend["merged"], name="Merged")
+    fig.update_layout(title="Weekly PR Throughput", barmode="group", yaxis_title="PR count")
+    return fig
+
+
+def pr_merge_time_distribution(prs_df: pd.DataFrame) -> go.Figure:
+    if prs_df.empty or "merged_at" not in prs_df.columns:
+        fig = go.Figure()
+        fig.update_layout(title="PR Merge Time Distribution (Days)")
+        return fig
+    data = prs_df.dropna(subset=["created_at", "merged_at"]).copy()
+    if data.empty:
+        fig = go.Figure()
+        fig.update_layout(title="PR Merge Time Distribution (Days)")
+        return fig
+    data["merge_days"] = _delta_days(data["merged_at"], data["created_at"])
+    fig = px.histogram(data, x="merge_days", nbins=20, title="PR Merge Time Distribution (Days)")
+    fig.update_xaxes(title="Days to merge")
+    fig.update_yaxes(title="PR count")
+    return fig
+
+
+def bug_status_pie(issues_df: pd.DataFrame) -> go.Figure:
+    if issues_df.empty:
+        fig = go.Figure()
+        fig.update_layout(title="Bug Issue Status")
+        return fig
+    bugs = issues_df[
+        issues_df["labels"].apply(
+            lambda labels: isinstance(labels, list)
+            and any("bug" in str(label).strip().lower() for label in labels)
+        )
+    ].copy()
+    if bugs.empty:
+        fig = go.Figure()
+        fig.update_layout(title="Bug Issue Status")
+        return fig
+    counts = bugs.groupby("state").size().reset_index(name="count")
+    return px.pie(counts, names="state", values="count", hole=0.45, title="Bug Issue Status")
+
+
+def bug_open_close_trend(issues_df: pd.DataFrame) -> go.Figure:
+    if issues_df.empty:
+        fig = go.Figure()
+        fig.update_layout(title="Bug Opened vs Closed Trend")
+        return fig
+    bugs = issues_df[
+        issues_df["labels"].apply(
+            lambda labels: isinstance(labels, list)
+            and any("bug" in str(label).strip().lower() for label in labels)
+        )
+    ].copy()
+    if bugs.empty:
+        fig = go.Figure()
+        fig.update_layout(title="Bug Opened vs Closed Trend")
+        return fig
+    opened = bugs.dropna(subset=["created_at"]).copy()
+    opened["week"] = opened["created_at"].dt.tz_localize(None).dt.to_period("W").dt.start_time
+    opened = opened.groupby("week").size().reset_index(name="opened")
+    closed = bugs.dropna(subset=["closed_at"]).copy()
+    closed["week"] = closed["closed_at"].dt.tz_localize(None).dt.to_period("W").dt.start_time
+    closed = closed.groupby("week").size().reset_index(name="closed")
+    trend = pd.merge(opened, closed, on="week", how="outer").fillna(0).sort_values("week")
+    fig = go.Figure()
+    fig.add_bar(x=trend["week"], y=trend["opened"], name="Opened")
+    fig.add_bar(x=trend["week"], y=trend["closed"], name="Closed")
+    fig.update_layout(title="Bug Opened vs Closed Trend", barmode="group", yaxis_title="Bug issues")
+    return fig
+
+
+def top_contributors_chart(issues_df: pd.DataFrame, prs_df: pd.DataFrame) -> go.Figure:
+    issue_authors = (
+        issues_df["author"].dropna().value_counts().rename("issues")
+        if not issues_df.empty and "author" in issues_df.columns else pd.Series(dtype=int)
+    )
+    pr_authors = (
+        prs_df["author"].dropna().value_counts().rename("prs")
+        if not prs_df.empty and "author" in prs_df.columns else pd.Series(dtype=int)
+    )
+    combined = pd.concat([issue_authors, pr_authors], axis=1).fillna(0)
+    if combined.empty:
+        fig = go.Figure()
+        fig.update_layout(title="Top Contributors (Issues + PRs)")
+        return fig
+    combined["total"] = combined["issues"] + combined["prs"]
+    combined = combined.sort_values("total", ascending=False).head(10).reset_index(names="author")
+    fig = go.Figure()
+    fig.add_bar(x=combined["author"], y=combined["issues"], name="Issues")
+    fig.add_bar(x=combined["author"], y=combined["prs"], name="PRs")
+    fig.update_layout(title="Top Contributors (Issues + PRs)", barmode="stack", yaxis_title="Contributions")
+    return fig
+
+
+def _pr_with_first_review(prs_df: pd.DataFrame, pr_reviews_df: pd.DataFrame) -> pd.DataFrame:
+    if prs_df.empty:
+        return prs_df.copy()
+    out = prs_df.copy()
+    if pr_reviews_df.empty or "pr_number" not in pr_reviews_df.columns:
+        out["first_review_at"] = pd.NaT
+        return out
+    review_times = (
+        pr_reviews_df.dropna(subset=["submitted_at"])
+        .groupby("pr_number", as_index=False)["submitted_at"]
+        .min()
+        .rename(columns={"submitted_at": "first_review_at"})
+    )
+    return out.merge(review_times, left_on="number", right_on="pr_number", how="left")
+
+
+def weekly_commit_activity(commits_df: pd.DataFrame) -> go.Figure:
+    title = "Weekly Commit Activity"
+    if commits_df.empty:
+        fig = go.Figure()
+        fig.update_layout(title=title)
+        return fig
+    data = commits_df.dropna(subset=["date"]).copy()
+    if data.empty:
+        fig = go.Figure()
+        fig.update_layout(title=title)
+        return fig
+    data["week"] = data["date"].dt.tz_localize(None).dt.to_period("W").dt.start_time
+    trend = data.groupby("week", as_index=False).size().rename(columns={"size": "commits"})
+    fig = px.bar(trend, x="week", y="commits", title=title)
+    fig.update_yaxes(title="Commits")
+    return fig
+
+
+def commits_per_developer_chart(commits_df: pd.DataFrame) -> go.Figure:
+    title = "Commits per Developer"
+    if commits_df.empty or "author" not in commits_df.columns:
+        fig = go.Figure()
+        fig.update_layout(title=title)
+        return fig
+    counts = commits_df["author"].dropna().value_counts().head(12).reset_index()
+    if counts.empty:
+        fig = go.Figure()
+        fig.update_layout(title=title)
+        return fig
+    counts.columns = ["author", "commits"]
+    fig = px.bar(counts, x="author", y="commits", title=title)
+    fig.update_yaxes(title="Commits")
+    return fig
+
+
+def code_churn_by_week_chart(prs_df: pd.DataFrame) -> go.Figure:
+    title = "Weekly Code Churn from Merged PRs"
+    req = {"merged_at", "additions", "deletions"}
+    if prs_df.empty or not req.issubset(set(prs_df.columns)):
+        fig = go.Figure()
+        fig.update_layout(title=title)
+        return fig
+    data = prs_df.dropna(subset=["merged_at"]).copy()
+    if data.empty:
+        fig = go.Figure()
+        fig.update_layout(title=title)
+        return fig
+    data["week"] = data["merged_at"].dt.tz_localize(None).dt.to_period("W").dt.start_time
+    trend = data.groupby("week", as_index=False)[["additions", "deletions"]].sum()
+    fig = go.Figure()
+    fig.add_bar(x=trend["week"], y=trend["additions"], name="Additions", marker_color="#374151")
+    fig.add_bar(x=trend["week"], y=trend["deletions"], name="Deletions", marker_color="#9CA3AF")
+    fig.update_layout(title=title, barmode="group")
+    fig.update_yaxes(title="Lines")
+    return fig
+
+
+def workflow_weekly_outcomes_chart(workflows_df: pd.DataFrame) -> go.Figure:
+    title = "Weekly Pipeline Outcomes"
+    if workflows_df.empty:
+        fig = go.Figure()
+        fig.update_layout(title=title)
+        return fig
+    data = workflows_df.dropna(subset=["created_at"]).copy()
+    if data.empty:
+        fig = go.Figure()
+        fig.update_layout(title=title)
+        return fig
+    data["week"] = data["created_at"].dt.tz_localize(None).dt.to_period("W").dt.start_time
+    data["outcome"] = data["conclusion"].fillna("other").str.lower()
+    data["outcome"] = data["outcome"].where(data["outcome"].isin(["success", "failure", "cancelled"]), "other")
+    trend = data.groupby(["week", "outcome"], as_index=False).size().rename(columns={"size": "count"})
+    fig = px.bar(
+        trend,
+        x="week",
+        y="count",
+        color="outcome",
+        title=title,
+        color_discrete_map={"success": "#16A34A", "failure": "#DC2626", "cancelled": "#F59E0B", "other": "#9CA3AF"},
+    )
+    fig.update_layout(barmode="stack")
+    return fig
+
+
+def workflow_duration_trend_chart(workflows_df: pd.DataFrame) -> go.Figure:
+    title = "Pipeline Duration Trend"
+    if workflows_df.empty:
+        fig = go.Figure()
+        fig.update_layout(title=title)
+        return fig
+    data = workflows_df.dropna(subset=["created_at", "updated_at"]).copy()
+    if data.empty:
+        fig = go.Figure()
+        fig.update_layout(title=title)
+        return fig
+    data["duration_min"] = _delta_hours(data["updated_at"], data["created_at"]) * 60.0
+    data = data[data["duration_min"] >= 0].copy()
+    if data.empty:
+        fig = go.Figure()
+        fig.update_layout(title=title)
+        return fig
+    data["week"] = data["created_at"].dt.tz_localize(None).dt.to_period("W").dt.start_time
+    trend = data.groupby("week", as_index=False)["duration_min"].median()
+    fig = px.line(trend, x="week", y="duration_min", markers=True, title=title)
+    fig.update_yaxes(title="Median duration (min)")
+    return fig
+
+
+def bug_severity_distribution_chart(defects_df: pd.DataFrame) -> go.Figure:
+    title = "Bug Severity Distribution"
+    if defects_df.empty:
+        fig = go.Figure()
+        fig.update_layout(title=title)
+        return fig
+
+    def severity_from_labels(labels: list[str]) -> str:
+        vals = {str(x).strip().lower() for x in (labels or [])}
+        if any(x in vals for x in {"severity: critical", "critical", "sev1", "p0"}):
+            return "critical"
+        if any(x in vals for x in {"severity: high", "high", "sev2", "p1"}):
+            return "high"
+        if any(x in vals for x in {"severity: medium", "medium", "sev3", "p2"}):
+            return "medium"
+        if any(x in vals for x in {"severity: low", "low", "sev4", "p3"}):
+            return "low"
+        return "unlabeled"
+
+    data = defects_df.copy()
+    data["severity"] = data["labels"].apply(severity_from_labels)
+    counts = data["severity"].value_counts().reset_index()
+    counts.columns = ["severity", "count"]
+    fig = px.bar(
+        counts,
+        x="severity",
+        y="count",
+        title=title,
+        color="severity",
+        color_discrete_map={
+            "critical": "#B91C1C",
+            "high": "#DC2626",
+            "medium": "#F59E0B",
+            "low": "#9CA3AF",
+            "unlabeled": "#D1D5DB",
+        },
+    )
+    return fig
+
+
+def collaboration_distribution_chart(issues_df: pd.DataFrame, prs_df: pd.DataFrame, commits_df: pd.DataFrame) -> go.Figure:
+    title = "Contribution Distribution (Issues + PRs + Commits)"
+    issue_auth = issues_df["author"].dropna().value_counts() if not issues_df.empty else pd.Series(dtype=int)
+    pr_auth = prs_df["author"].dropna().value_counts() if not prs_df.empty else pd.Series(dtype=int)
+    commit_auth = commits_df["author"].dropna().value_counts() if not commits_df.empty else pd.Series(dtype=int)
+    merged = pd.concat([issue_auth.rename("issues"), pr_auth.rename("prs"), commit_auth.rename("commits")], axis=1).fillna(0)
+    if merged.empty:
+        fig = go.Figure()
+        fig.update_layout(title=title)
+        return fig
+    merged["total"] = merged.sum(axis=1)
+    merged = merged.sort_values("total", ascending=False).head(12).reset_index(names="author")
+    fig = go.Figure()
+    fig.add_bar(x=merged["author"], y=merged["issues"], name="Issues", marker_color="#111827")
+    fig.add_bar(x=merged["author"], y=merged["prs"], name="PRs", marker_color="#6B7280")
+    fig.add_bar(x=merged["author"], y=merged["commits"], name="Commits", marker_color="#9CA3AF")
+    fig.update_layout(title=title, barmode="stack")
+    return fig
+
+def _dot_header(rankdir: str = "LR") -> str:
+    return (
+        "digraph G {\n"
+        f'  rankdir={rankdir};\n'
+        '  graph [bgcolor="white", pad="0.25", nodesep="0.5", ranksep="0.7", splines=ortho];\n'
+        '  node [shape=box, style="rounded,filled", color="#64748b", fillcolor="#f1f5f9", fontname="Helvetica", fontsize=11, margin="0.12,0.08"];\n'
+        '  edge [color="#64748b", arrowsize=0.7, penwidth=1.2];\n'
+    )
+
+
+def c4_container_diagram_dot() -> str:
+    return (
+        _dot_header("LR")
+        + '  user [label="Users"];\n'
+        + '  frontend [label="Web Frontend\\nReact + Vite"];\n'
+        + '  backend [label="Application Backend\\nFastAPI"];\n'
+        + '  inference [label="Inference Service\\nYOLO Runtime"];\n'
+        + '  postgres [label="Postgres\\nRelational Data"];\n'
+        + '  neo4j [label="Neo4j\\nGraph Relationships"];\n'
+        + '  storage [label="Object/File Storage\\nTrap Images + Artifacts"];\n'
+        + '  weather [label="External Weather API\\nOpen-Meteo"];\n'
+        + "  user -> frontend;\n"
+        + "  frontend -> backend;\n"
+        + "  backend -> inference;\n"
+        + "  backend -> postgres;\n"
+        + "  backend -> neo4j;\n"
+        + "  backend -> storage;\n"
+        + "  backend -> weather;\n"
+        + "}\n"
+    )
+
+
+def backend_component_diagram_dot() -> str:
+    return (
+        _dot_header("LR")
+        + '  auth_router [label="Auth Router"];\n'
+        + '  map_router [label="Map Router"];\n'
+        + '  analysis_router [label="Analysis Router"];\n'
+        + '  env_router [label="Environment Router"];\n'
+        + '  analytics_router [label="Analytics Router"];\n'
+        + '  deps [label="Deps + Security"];\n'
+        + '  graph_svc [label="Graph Service"];\n'
+        + '  env_svc [label="Environment Service"];\n'
+        + '  infer_svc [label="Inference Service"];\n'
+        + '  upload_svc [label="Upload Service"];\n'
+        + '  schemas [label="Pydantic Schemas"];\n'
+        + '  models [label="SQLAlchemy Models"];\n'
+        + '  session [label="DB Session"];\n'
+        + '  stores [label="Postgres / Neo4j / Storage"];\n'
+        + "  {rank=same; auth_router; map_router; analysis_router; env_router; analytics_router;}\n"
+        + "  auth_router -> deps;\n"
+        + "  map_router -> deps;\n"
+        + "  analysis_router -> deps;\n"
+        + "  env_router -> deps;\n"
+        + "  analytics_router -> deps;\n"
+        + "  map_router -> graph_svc;\n"
+        + "  analysis_router -> infer_svc;\n"
+        + "  analysis_router -> upload_svc;\n"
+        + "  analysis_router -> env_svc;\n"
+        + "  env_router -> env_svc;\n"
+        + "  analytics_router -> env_svc;\n"
+        + "  auth_router -> schemas;\n"
+        + "  map_router -> schemas;\n"
+        + "  analysis_router -> schemas;\n"
+        + "  env_router -> schemas;\n"
+        + "  graph_svc -> session;\n"
+        + "  env_svc -> session;\n"
+        + "  infer_svc -> session;\n"
+        + "  upload_svc -> session;\n"
+        + "  deps -> session;\n"
+        + "  session -> models;\n"
+        + "  models -> stores;\n"
+        + "  session -> stores;\n"
+        + "}\n"
+    )
+
+
+def sequence_diagram_upload_workflow() -> go.Figure:
+    participants = ["User", "Frontend", "Backend API", "Auth", "Graph Service", "Inference", "Postgres", "Neo4j"]
+    x_positions = {name: idx for idx, name in enumerate(participants)}
+    steps = [
+        ("User", "Frontend", "Open app and submit login"),
+        ("Frontend", "Backend API", "POST /api/auth/login"),
+        ("Backend API", "Auth", "Validate credentials + token"),
+        ("Auth", "Backend API", "Return access token"),
+        ("Backend API", "Frontend", "Login success + JWT"),
+        ("User", "Frontend", "Create field + polygon"),
+        ("Frontend", "Backend API", "POST /api/map/fields"),
+        ("Backend API", "Graph Service", "Create field node"),
+        ("Graph Service", "Neo4j", "Persist field graph relations"),
+        ("Backend API", "Postgres", "Persist field/trap metadata"),
+        ("Backend API", "Frontend", "Field created response"),
+        ("User", "Frontend", "Upload trap images"),
+        ("Frontend", "Backend API", "POST /api/analysis/upload-range"),
+        ("Backend API", "Inference", "Run model inference"),
+        ("Inference", "Backend API", "Detection list + confidence"),
+        ("Backend API", "Postgres", "Persist uploads + detections"),
+        ("Backend API", "Frontend", "Return analytics summary"),
+        ("Frontend", "User", "Show detections + trends"),
+    ]
+
+    fig = go.Figure()
+    for name, x in x_positions.items():
+        fig.add_trace(
+            go.Scatter(
+                x=[x, x],
+                y=[0, len(steps) + 1],
+                mode="lines",
+                line=dict(color="#CBD5E1", dash="dash"),
+                hoverinfo="skip",
+                showlegend=False,
+            )
+        )
+        fig.add_annotation(x=x, y=len(steps) + 1.3, text=name, showarrow=False, font=dict(size=12))
+
+    for idx_step, (src, dst, label) in enumerate(steps, start=1):
+        y = len(steps) + 1 - idx_step
+        fig.add_annotation(
+            x=x_positions[dst],
+            y=y,
+            ax=x_positions[src],
+            ay=y,
+            xref="x",
+            yref="y",
+            axref="x",
+            ayref="y",
+            showarrow=True,
+            arrowhead=3,
+            arrowwidth=1.4,
+            arrowcolor=COSMIC_PURPLE,
+        )
+        fig.add_annotation(
+            x=(x_positions[src] + x_positions[dst]) / 2,
+            y=y + 0.2,
+            text=f"{idx_step}. {label}",
+            showarrow=False,
+            font=dict(size=10, color="#374151"),
+        )
+
+    fig.update_layout(
+        title="Sequence Diagram (Upload + Inference Workflow)",
+        xaxis=dict(visible=False, range=[-0.5, len(participants) - 0.5]),
+        yaxis=dict(visible=False, range=[0, len(steps) + 1.8]),
+        margin=dict(l=10, r=10, t=50, b=10),
+        plot_bgcolor="white",
+        paper_bgcolor="white",
+    )
+    return fig
+
+
+def er_diagram_dot() -> str:
+    return (
+        _dot_header("LR")
+        + '  users [label="users\\nPK id"];\n'
+        + '  fields [label="field_maps\\nPK id\\nFK owner_user_id"];\n'
+        + '  traps [label="trap_points\\nPK id\\nFK field_id"];\n'
+        + '  uploads [label="trap_uploads\\nPK id\\nFK user_id\\nFK trap_id"];\n'
+        + '  detections [label="detections\\nPK id\\nFK upload_id"];\n'
+        + '  env_daily [label="environmental_daily\\nPK id\\nFK field_id"];\n'
+        + '  env_source [label="environmental_source_daily\\nPK id\\nFK field_id"];\n'
+        + "  users -> fields;\n"
+        + "  users -> uploads;\n"
+        + "  fields -> traps;\n"
+        + "  fields -> uploads;\n"
+        + "  traps -> uploads;\n"
+        + "  uploads -> detections;\n"
+        + "  fields -> env_daily;\n"
+        + "  fields -> env_source;\n"
+        + "}\n"
+    )
+
+
+def deployment_diagram_dot() -> str:
+    return (
+        _dot_header("LR")
+        + '  browser [label="Browser\\n(User)"];\n'
+        + '  frontend [label="Frontend Container\\n(React)"];\n'
+        + '  backend [label="Backend Container\\n(FastAPI)"];\n'
+        + '  inference [label="Inference Worker\\n(YOLO Runtime)"];\n'
+        + '  k8s [label="Kubernetes Cluster"];\n'
+        + '  db [label="Cloud Postgres"];\n'
+        + '  neo4j [label="Cloud Neo4j"];\n'
+        + '  storage [label="Object Storage\\n(Images/Artifacts)"];\n'
+        + '  weather [label="Open-Meteo API"];\n'
+        + "  browser -> frontend;\n"
+        + "  frontend -> backend;\n"
+        + "  backend -> inference;\n"
+        + "  backend -> k8s;\n"
+        + "  k8s -> db;\n"
+        + "  k8s -> neo4j;\n"
+        + "  k8s -> storage;\n"
+        + "  k8s -> weather;\n"
+        + "}\n"
+    )
+
+
+def postgres_data_model_diagram_dot() -> str:
+    return (
+        _dot_header("LR")
+        + '  users [label="users"];\n'
+        + '  field_maps [label="field_maps"];\n'
+        + '  trap_points [label="trap_points"];\n'
+        + '  trap_uploads [label="trap_uploads"];\n'
+        + '  detections [label="detections"];\n'
+        + '  environmental_daily [label="environmental_daily"];\n'
+        + '  environmental_source_daily [label="environmental_source_daily"];\n'
+        + "  users -> field_maps;\n"
+        + "  users -> trap_uploads;\n"
+        + "  field_maps -> trap_points;\n"
+        + "  field_maps -> trap_uploads;\n"
+        + "  trap_points -> trap_uploads;\n"
+        + "  trap_uploads -> detections;\n"
+        + "  field_maps -> environmental_daily;\n"
+        + "  field_maps -> environmental_source_daily;\n"
+        + "}\n"
+    )
+
+
+def graph_model_diagram_dot() -> str:
+    return (
+        _dot_header("LR")
+        + '  user [label="(:User)"];\n'
+        + '  field [label="(:Field)"];\n'
+        + '  trap [label="(:Trap)"];\n'
+        + '  upload [label="(:Upload)"];\n'
+        + '  detection [label="(:Detection)"];\n'
+        + '  weather [label="(:WeatherDay)"];\n'
+        + '  user -> field [label=" OWNS"];\n'
+        + '  field -> trap [label=" HAS_TRAP"];\n'
+        + '  trap -> upload [label=" CAPTURED_AT"];\n'
+        + '  upload -> detection [label=" CONTAINS"];\n'
+        + '  field -> weather [label=" HAS_WEATHER"];\n'
+        + "}\n"
+    )
+
+
+def backend_class_diagram_dot() -> str:
+    return (
+        _dot_header("LR")
+        + '  User [label="User\\n+id\\n+email\\n+role"];\n'
+        + '  FieldMap [label="FieldMap\\n+id\\n+owner_user_id\\n+polygon_geojson"];\n'
+        + '  TrapPoint [label="TrapPoint\\n+id\\n+field_id\\n+code"];\n'
+        + '  TrapUpload [label="TrapUpload\\n+id\\n+user_id\\n+field_id\\n+trap_id"];\n'
+        + '  Detection [label="Detection\\n+id\\n+upload_id\\n+confidence"];\n'
+        + '  EnvironmentalDaily [label="EnvironmentalDaily\\n+id\\n+field_id\\n+observation_date"];\n'
+        + '  EnvironmentalSourceDaily [label="EnvironmentalSourceDaily\\n+id\\n+field_id\\n+provider"];\n'
+        + '  User -> FieldMap [label="1..* owns"];\n'
+        + '  FieldMap -> TrapPoint [label="1..* contains"];\n'
+        + '  User -> TrapUpload [label="1..* uploads"];\n'
+        + '  TrapPoint -> TrapUpload [label="1..* captured_by"];\n'
+        + '  TrapUpload -> Detection [label="1..* detections"];\n'
+        + '  FieldMap -> EnvironmentalDaily [label="1..* weather"];\n'
+        + '  FieldMap -> EnvironmentalSourceDaily [label="1..* weather_raw"];\n'
+        + "}\n"
+    )
+
+
+_require_dashboard_access()
+
+token = _get_config("GITHUB_TOKEN", "")
+owner = _get_config("GITHUB_OWNER", "")
+repo = _get_config("GITHUB_REPO", "")
+show_internal_errors = _get_config_bool("SHOW_INTERNAL_ERRORS", False)
 
 if not token:
     st.error("Set GITHUB_TOKEN in 02_pm_analytics_dashboard/.env.")
@@ -1323,21 +1944,31 @@ if not owner or not repo:
     st.error("Set GITHUB_OWNER and GITHUB_REPO in 02_pm_analytics_dashboard/.env.")
     st.stop()
 
-header_left, header_right = st.columns([4, 1])
+header_left, header_mid, header_right = st.columns([4, 1, 1])
 with header_left:
     st.caption(f"Repository: {owner}/{repo}")
-with header_right:
+with header_mid:
     if st.button("Refresh Data", key="refresh_data_top"):
         fetch_data.clear()
+with header_right:
+    if st.button("Logout", key="dashboard_logout"):
+        st.session_state["dashboard_authenticated"] = False
+        st.rerun()
 
 try:
     data = fetch_data(owner=owner, repo=repo, token=token)
 except Exception as exc:  # noqa: BLE001
-    st.error(f"Unable to load GitHub data: {exc}")
+    st.error("Unable to load GitHub data.")
+    if show_internal_errors:
+        st.exception(exc)
     st.stop()
 
 issues_df = data["issues"]
 prs_df = data["pulls"]
+commits_df = data.get("commits", pd.DataFrame())
+workflows_df = data.get("workflows", pd.DataFrame())
+pr_reviews_df = data.get("pr_reviews", pd.DataFrame())
+issue_events_df = data.get("issue_events", pd.DataFrame())
 labels_df = data["labels"]
 milestones_df = data["milestones"]
 
@@ -1345,7 +1976,27 @@ if issues_df.empty and prs_df.empty:
     st.warning("No issue or PR data found for this repository.")
     st.stop()
 
-pm_tab, quality_tab, deploy_tab = st.tabs(["Project Management", "Quality", "Deployment"])
+(
+    pm_tab,
+    architecture_tab,
+    dev_tab,
+    quality_tab,
+    cicd_tab,
+    defects_tab,
+    perf_tab,
+    collab_tab,
+) = st.tabs(
+    [
+        "Project Management",
+        "Architecture",
+        "Development (Engineering Productivity)",
+        "Quality",
+        "CI/CD & Deployment",
+        "Issues & Defects",
+        "System Performance",
+        "Collaboration",
+    ]
+)
 
 with pm_tab:
     st.markdown("### Project Management")
@@ -1566,7 +2217,7 @@ with quality_tab:
     q1, q2, q3 = st.columns([1, 1, 2])
     with q1:
         if st.button("Run Weekly Quality Snapshot", key="quality_run_snapshot"):
-            snapshot = run_quality_snapshot(os.path.abspath(os.path.join(ROOT_DIR, "..")))
+            snapshot = run_quality_snapshot(REPO_ROOT)
             history.append(snapshot)
             save_quality_history(history)
             st.success("Quality snapshot recorded.")
@@ -1604,24 +2255,217 @@ with quality_tab:
             key="quality_coverage_trend",
         )
 
-with deploy_tab:
-    st.markdown("### Deployment")
-    st.caption("Deployment tracking is prepared; metrics will populate once environments are live.")
+with dev_tab:
+    st.markdown("### Development (Engineering Productivity)")
+    st.caption("Lead time, cycle time, review speed, throughput, and code churn (scope-aligned with PM filters).")
 
-    d1, d2, d3, d4 = st.columns(4)
-    d1.metric("Uptime (7d)", "N/A")
-    d2.metric("Incidents (30d)", "N/A")
-    d3.metric("MTTR", "N/A")
-    d4.metric("Crash Count (7d)", "N/A")
+    scoped_issues = filtered_issues.copy() if "filtered_issues" in locals() else issues_df.copy()
+    scoped_prs = filtered_prs.copy() if "filtered_prs" in locals() else prs_df.copy()
+    prs_with_review = _pr_with_first_review(scoped_prs, pr_reviews_df)
 
-    e1, e2 = st.columns(2)
-    with e1:
-        render_chart(deployment_placeholder_chart("Service Uptime Trend"), key="deploy_uptime_placeholder")
-    with e2:
-        render_chart(deployment_placeholder_chart("Incidents and Recovery Time"), key="deploy_incidents_placeholder")
+    merged = prs_with_review.dropna(subset=["created_at", "merged_at"]).copy()
+    merged["lead_days"] = _delta_days(merged["merged_at"], merged["created_at"])
+    lead_time_days = float(merged["lead_days"].median()) if not merged.empty else float("nan")
 
-    e3, e4 = st.columns(2)
-    with e3:
-        render_chart(deployment_placeholder_chart("Deployment Frequency"), key="deploy_frequency_placeholder")
-    with e4:
-        render_chart(deployment_placeholder_chart("Deployment Success Rate"), key="deploy_success_placeholder")
+    reviewed = prs_with_review.dropna(subset=["created_at", "first_review_at"]).copy()
+    reviewed["review_hours"] = _delta_hours(reviewed["first_review_at"], reviewed["created_at"])
+    review_hours = float(reviewed["review_hours"].median()) if not reviewed.empty else float("nan")
+
+    cycle_days = cycle_metrics(scoped_issues, scoped_prs).get("avg_cycle_days", float("nan"))
+    merged_prs = int(scoped_prs["merged_at"].notna().sum()) if not scoped_prs.empty else 0
+    commits_per_week = 0.0
+    if not commits_df.empty:
+        ctmp = commits_df.dropna(subset=["date"]).copy()
+        if not ctmp.empty:
+            ctmp["week"] = ctmp["date"].dt.tz_localize(None).dt.to_period("W").dt.start_time
+            commits_per_week = float(ctmp.groupby("week").size().mean())
+
+    k1, k2, k3, k4, k5 = st.columns(5)
+    k1.metric("Lead Time for Changes", fmt_days(lead_time_days))
+    k2.metric("Avg Cycle Time", fmt_days(cycle_days))
+    k3.metric("PR First Review Time", "N/A" if pd.isna(review_hours) else f"{review_hours:.1f} h")
+    k4.metric("Merged PRs", merged_prs)
+    k5.metric("Avg Commits / Week", f"{commits_per_week:.1f}")
+
+    d1, d2 = st.columns(2)
+    with d1:
+        render_chart(weekly_pr_throughput(scoped_prs), key="dev_pr_weekly")
+    with d2:
+        render_chart(pr_merge_time_distribution(scoped_prs), key="dev_pr_merge_dist")
+    d3, d4 = st.columns(2)
+    with d3:
+        render_chart(weekly_commit_activity(commits_df), key="dev_commit_weekly")
+    with d4:
+        render_chart(code_churn_by_week_chart(scoped_prs), key="dev_code_churn")
+
+with cicd_tab:
+    st.markdown("### CI/CD & Deployment")
+    st.caption("Pipeline efficiency from GitHub Actions runs. Deployment KPIs show placeholder if no deploy runs exist yet.")
+
+    wf = workflows_df.copy()
+    if "start_date" in locals() and "end_date" in locals() and not wf.empty:
+        sd = pd.Timestamp(start_date).tz_localize("UTC")
+        ed = pd.Timestamp(end_date).tz_localize("UTC") + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
+        wf = wf[(wf["created_at"].notna()) & (wf["created_at"] >= sd) & (wf["created_at"] <= ed)].copy()
+
+    completed = wf[wf["conclusion"].notna()].copy() if not wf.empty else pd.DataFrame()
+    success_rate = float((completed["conclusion"].str.lower() == "success").mean() * 100.0) if not completed.empty else float("nan")
+    failure_rate = float((completed["conclusion"].str.lower().isin(["failure", "timed_out", "startup_failure", "action_required"])).mean() * 100.0) if not completed.empty else float("nan")
+    duration_min = float((_delta_hours(completed["updated_at"], completed["created_at"]) * 60.0).median()) if not completed.empty else float("nan")
+    deploy_runs = wf[wf["name"].fillna("").str.lower().str.contains("deploy|release", regex=True)] if not wf.empty else pd.DataFrame()
+    deploy_freq_week = 0.0
+    if not deploy_runs.empty:
+        tmp = deploy_runs.dropna(subset=["created_at"]).copy()
+        tmp["week"] = tmp["created_at"].dt.tz_localize(None).dt.to_period("W").dt.start_time
+        deploy_freq_week = float(tmp.groupby("week").size().mean())
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Build Success Rate", fmt_pct(success_rate))
+    c2.metric("Pipeline Failure Rate", fmt_pct(failure_rate))
+    c3.metric("Median Pipeline Duration", "N/A" if pd.isna(duration_min) else f"{duration_min:.1f} min")
+    c4.metric("Deployment Frequency", f"{deploy_freq_week:.2f} / week")
+
+    w1, w2 = st.columns(2)
+    with w1:
+        render_chart(workflow_weekly_outcomes_chart(wf), key="cicd_weekly_outcomes")
+    with w2:
+        render_chart(workflow_duration_trend_chart(wf), key="cicd_duration_trend")
+
+with defects_tab:
+    st.markdown("### Issues & Defects")
+    st.caption("Bug intake, closure speed, reopen behavior, and severity profile.")
+    scoped_issues = filtered_issues.copy() if "filtered_issues" in locals() else issues_df.copy()
+    defects = scoped_issues[
+        scoped_issues["labels"].apply(
+            lambda labels: isinstance(labels, list)
+            and any("bug" in str(label).strip().lower() for label in labels)
+        )
+    ].copy() if not scoped_issues.empty else pd.DataFrame()
+    open_bugs = int((defects["state"].str.lower() == "open").sum()) if not defects.empty else 0
+    closed_bugs = int((defects["state"].str.lower() == "closed").sum()) if not defects.empty else 0
+    bug_rate = (len(defects) / max(len(scoped_issues), 1) * 100.0) if not defects.empty else 0.0
+    bug_ttr_days = (
+        float(
+            _delta_days(
+                defects.dropna(subset=["created_at", "closed_at"])["closed_at"],
+                defects.dropna(subset=["created_at", "closed_at"])["created_at"],
+            ).median()
+        )
+        if not defects.empty
+        else float("nan")
+    )
+
+    reopen_rate = float("nan")
+    if not defects.empty and not issue_events_df.empty:
+        defect_numbers = set(defects["number"].dropna().astype(int).tolist())
+        reopened = issue_events_df[
+            issue_events_df["issue_number"].isin(defect_numbers)
+            & (issue_events_df["event"].fillna("").str.lower() == "reopened")
+        ]
+        reopen_rate = (reopened["issue_number"].nunique() / max(len(defect_numbers), 1)) * 100.0
+
+    b1, b2, b3, b4 = st.columns(4)
+    b1.metric("Bug Rate", f"{bug_rate:.1f}%")
+    b2.metric("Open Bugs", open_bugs)
+    b3.metric("Median Time to Resolution", fmt_days(bug_ttr_days))
+    b4.metric("Reopen Rate", fmt_pct(reopen_rate))
+
+    bl, br = st.columns(2)
+    with bl:
+        render_chart(bug_status_pie(scoped_issues), key="defects_status_pie")
+    with br:
+        render_chart(bug_open_close_trend(scoped_issues), key="defects_trend")
+    bl2, br2 = st.columns(2)
+    with bl2:
+        render_chart(bug_severity_distribution_chart(defects), key="defects_severity_dist", brand_style=False)
+    with br2:
+        render_chart(issue_state_pie(defects), key="defects_state_split", brand_style=False)
+
+with perf_tab:
+    st.markdown("### System Performance")
+    st.caption("Operational telemetry placeholders. Connect runtime metrics to populate these views.")
+    p1, p2, p3, p4 = st.columns(4)
+    p1.metric("API P95 Latency", "N/A")
+    p2.metric("Inference P95 Latency", "N/A")
+    p3.metric("Error Rate", "N/A")
+    p4.metric("Throughput (req/min)", "N/A")
+    pl, pr = st.columns(2)
+    with pl:
+        render_chart(deployment_placeholder_chart("API Latency Trend"), key="perf_api_latency")
+    with pr:
+        render_chart(deployment_placeholder_chart("Inference Latency Trend"), key="perf_inference_latency")
+
+with collab_tab:
+    st.markdown("### Collaboration")
+    st.caption("Review participation, bus-factor proxy, and contribution distribution.")
+    scoped_issues = filtered_issues.copy() if "filtered_issues" in locals() else issues_df.copy()
+    scoped_prs = filtered_prs.copy() if "filtered_prs" in locals() else prs_df.copy()
+
+    review_participants = pr_reviews_df["author"].dropna().nunique() if not pr_reviews_df.empty else 0
+    pr_authors = scoped_prs["author"].dropna().nunique() if not scoped_prs.empty else 0
+    review_participation_rate = (review_participants / max(pr_authors, 1)) * 100.0
+
+    contribution = pd.concat(
+        [
+            scoped_issues["author"].dropna(),
+            scoped_prs["author"].dropna(),
+            commits_df["author"].dropna() if not commits_df.empty else pd.Series(dtype=object),
+        ]
+    )
+    bus_factor = 0.0
+    if not contribution.empty:
+        dist = contribution.value_counts(normalize=True)
+        bus_factor = float(dist.iloc[0] * 100.0)
+
+    review_comments = int(scoped_prs["review_comments_count"].fillna(0).sum()) if "review_comments_count" in scoped_prs.columns else 0
+    avg_review_comments = review_comments / max(len(scoped_prs), 1) if len(scoped_prs) else 0.0
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Review Participants", review_participants)
+    col2.metric("Review Participation", f"{review_participation_rate:.1f}%")
+    col3.metric("PR Review Comments", review_comments)
+    col4.metric("Bus Factor Risk", f"{bus_factor:.1f}% top-contributor share")
+
+    c1, c2 = st.columns(2)
+    with c1:
+        render_chart(top_contributors_chart(scoped_issues, scoped_prs), key="collab_top_contributors")
+    with c2:
+        assignee_counts = scoped_issues.explode("assignees")["assignees"].dropna().value_counts().head(10) if not scoped_issues.empty else pd.Series(dtype=int)
+        if assignee_counts.empty:
+            render_chart(deployment_placeholder_chart("Top Assignees"), key="collab_top_assignees_empty")
+        else:
+            df = assignee_counts.reset_index()
+            df.columns = ["assignee", "issues"]
+            fig = px.bar(df, x="assignee", y="issues", title="Top Assignees by Issue Count")
+            render_chart(fig, key="collab_top_assignees")
+    c3, c4 = st.columns(2)
+    with c3:
+        render_chart(collaboration_distribution_chart(scoped_issues, scoped_prs, commits_df), key="collab_distribution", brand_style=False)
+    with c4:
+        commits_plot = commits_per_developer_chart(commits_df)
+        commits_plot.update_layout(title="Commit Distribution by Developer")
+        render_chart(commits_plot, key="collab_commits_per_dev", brand_style=False)
+
+with architecture_tab:
+    st.markdown("### Architecture")
+    st.caption("Application-only architecture views (frontend, backend, inference, data stores).")
+
+    st.markdown("#### C4 Container Diagram")
+    st.graphviz_chart(c4_container_diagram_dot(), use_container_width=True)
+    st.markdown("#### Component Diagram (Backend)")
+    st.graphviz_chart(backend_component_diagram_dot(), use_container_width=True)
+    render_chart(sequence_diagram_upload_workflow(), key="arch_sequence_workflow", brand_style=False)
+    st.markdown("#### Class Diagram (Backend Domain)")
+    st.graphviz_chart(backend_class_diagram_dot(), use_container_width=True)
+    st.markdown("#### ER Diagram")
+    st.graphviz_chart(er_diagram_dot(), use_container_width=True)
+    st.markdown("#### Deployment Diagram")
+    st.graphviz_chart(deployment_diagram_dot(), use_container_width=True)
+    st.markdown("#### Databases")
+    st.caption("Dedicated views for relational and graph data models.")
+    db1, db2 = st.columns(2)
+    with db1:
+        st.markdown("##### Postgres")
+        st.graphviz_chart(postgres_data_model_diagram_dot(), use_container_width=True)
+    with db2:
+        st.markdown("##### Graph (Neo4j)")
+        st.graphviz_chart(graph_model_diagram_dot(), use_container_width=True)

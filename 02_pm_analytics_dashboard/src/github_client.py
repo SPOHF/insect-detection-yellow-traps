@@ -83,6 +83,17 @@ class GitHubClient:
     def get_pulls(self) -> List[Dict[str, Any]]:
         return self._get_paginated(self._repo_path("/pulls"), params={"state": "all", "sort": "updated"})
 
+    def get_pull(self, number: int) -> Dict[str, Any]:
+        response = self._request(f"{self.base_url}{self._repo_path(f'/pulls/{number}')}")
+        payload = response.json()
+        return payload if isinstance(payload, dict) else {}
+
+    def get_pull_reviews(self, number: int) -> List[Dict[str, Any]]:
+        return self._get_paginated(self._repo_path(f"/pulls/{number}/reviews"))
+
+    def get_pull_review_comments(self, number: int) -> List[Dict[str, Any]]:
+        return self._get_paginated(self._repo_path(f"/pulls/{number}/comments"))
+
     def get_labels(self) -> List[Dict[str, Any]]:
         return self._get_paginated(self._repo_path("/labels"))
 
@@ -91,6 +102,27 @@ class GitHubClient:
 
     def get_assignees(self) -> List[Dict[str, Any]]:
         return self._get_paginated(self._repo_path("/assignees"))
+
+    def get_commits(self) -> List[Dict[str, Any]]:
+        return self._get_paginated(self._repo_path("/commits"), params={"per_page": 100})
+
+    def get_workflow_runs(self) -> List[Dict[str, Any]]:
+        items: List[Dict[str, Any]] = []
+        url = f"{self.base_url}{self._repo_path('/actions/runs')}"
+        query: Optional[Dict[str, Any]] = {"per_page": 100}
+        while url:
+            response = self._request(url, params=query)
+            payload = response.json()
+            runs = payload.get("workflow_runs", []) if isinstance(payload, dict) else []
+            if isinstance(runs, list):
+                items.extend(runs)
+            next_url = response.links.get("next", {}).get("url")
+            url = next_url
+            query = None
+        return items
+
+    def get_issue_events(self, number: int) -> List[Dict[str, Any]]:
+        return self._get_paginated(self._repo_path(f"/issues/{number}/events"))
 
     def get_issue_project_fields(self) -> Dict[int, Dict[str, str]]:
         """

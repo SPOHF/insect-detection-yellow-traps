@@ -11,7 +11,9 @@ def ensure_datetime(df: pd.DataFrame, column: str) -> pd.Series:
 
 
 def days_between(end: pd.Series, start: pd.Series) -> pd.Series:
-    return (end - start).dt.total_seconds() / 86400.0
+    end_utc = pd.to_datetime(end, utc=True, errors="coerce")
+    start_utc = pd.to_datetime(start, utc=True, errors="coerce")
+    return (end_utc - start_utc).dt.total_seconds() / 86400.0
 
 
 def contains_in_list(values: list[str], target: Optional[str]) -> bool:
