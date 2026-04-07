@@ -22,3 +22,9 @@ projects/*/data/
 04_modeling_experimental/data/raw/
 04_modeling_experimental/data/**/2024/
 04_modeling_experimental/data/**/2025/
+
+# Never commit image binaries from local datasets/runs
+*.jpg
+*.jpeg
+*.JPG
+*.JPEG
