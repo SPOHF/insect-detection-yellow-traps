@@ -57,6 +57,63 @@ def _normalize_pr(item: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _normalize_commit(item: Dict[str, Any]) -> Dict[str, Any]:
+    commit = item.get("commit") or {}
+    author = commit.get("author") or {}
+    return {
+        "sha": item.get("sha"),
+        "author": (item.get("author") or {}).get("login") or author.get("name"),
+        "message": commit.get("message"),
+        "date": author.get("date"),
+        "url": item.get("html_url"),
+    }
+
+
+def _normalize_workflow_run(item: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "id": item.get("id"),
+        "name": item.get("name") or item.get("display_title"),
+        "status": item.get("status"),
+        "conclusion": item.get("conclusion"),
+        "event": item.get("event"),
+        "run_started_at": item.get("run_started_at"),
+        "created_at": item.get("created_at"),
+        "updated_at": item.get("updated_at"),
+        "url": item.get("html_url"),
+    }
+
+
+def _normalize_issue_event(issue_number: int, item: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "id": item.get("id"),
+        "issue_number": issue_number,
+        "event": item.get("event"),
+        "created_at": item.get("created_at"),
+        "actor": (item.get("actor") or {}).get("login"),
+        "label": ((item.get("label") or {}).get("name") if isinstance(item.get("label"), dict) else None),
+    }
+
+
+def _normalize_pr_review(pr_number: int, item: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "id": item.get("id"),
+        "pr_number": pr_number,
+        "state": item.get("state"),
+        "submitted_at": item.get("submitted_at"),
+        "author": (item.get("user") or {}).get("login"),
+    }
+
+
+def _normalize_pr_detail(item: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "number": item.get("number"),
+        "additions": item.get("additions", 0),
+        "deletions": item.get("deletions", 0),
+        "changed_files": item.get("changed_files", 0),
+        "draft": bool(item.get("draft", False)),
+    }
+
+
 def _to_dataframe(records: List[Dict[str, Any]], datetime_columns: List[str]) -> pd.DataFrame:
     df = pd.DataFrame(records)
     if df.empty:
@@ -76,6 +133,14 @@ def load_repository_data(owner: str, repo: str, token: str) -> Dict[str, pd.Data
     raw_labels = client.get_labels()
     raw_milestones = client.get_milestones()
     raw_assignees = client.get_assignees()
+    try:
+        raw_commits = client.get_commits()
+    except Exception:
+        raw_commits = []
+    try:
+        raw_workflow_runs = client.get_workflow_runs()
+    except Exception:
+        raw_workflow_runs = []
 
     issue_project_fields: Dict[int, Dict[str, str]] = {}
     try:
@@ -89,9 +154,62 @@ def load_repository_data(owner: str, repo: str, token: str) -> Dict[str, pd.Data
         if "pull_request" not in item
     ]
     pr_records = [_normalize_pr(item) for item in raw_pulls]
+    commit_records = [_normalize_commit(item) for item in raw_commits]
+    workflow_records = [_normalize_workflow_run(item) for item in raw_workflow_runs]
+
+    pr_details_records: List[Dict[str, Any]] = []
+    pr_reviews_records: List[Dict[str, Any]] = []
+    issue_events_records: List[Dict[str, Any]] = []
+    # Keep enrichment bounded so dashboard stays responsive and avoids API rate-limit spikes.
+    max_pr_enrichment = 150
+    max_issue_enrichment = 200
+
+    for pr in pr_records[:max_pr_enrichment]:
+        pr_number = int(pr.get("number", 0) or 0)
+        if pr_number <= 0:
+            continue
+        try:
+            detail = client.get_pull(pr_number)
+            pr_details_records.append(_normalize_pr_detail(detail))
+        except Exception:
+            pass
+        try:
+            reviews = client.get_pull_reviews(pr_number)
+            pr_reviews_records.extend([_normalize_pr_review(pr_number, r) for r in reviews])
+        except Exception:
+            pass
+        try:
+            comments = client.get_pull_review_comments(pr_number)
+            pr_record = next((x for x in pr_records if int(x.get("number", -1) or -1) == pr_number), None)
+            if pr_record is not None:
+                pr_record["review_comments_count"] = len(comments)
+        except Exception:
+            pass
+
+    for issue in issue_records[:max_issue_enrichment]:
+        issue_number = int(issue.get("number", 0) or 0)
+        if issue_number <= 0:
+            continue
+        try:
+            events = client.get_issue_events(issue_number)
+            issue_events_records.extend([_normalize_issue_event(issue_number, e) for e in events])
+        except Exception:
+            pass
 
     issues_df = _to_dataframe(issue_records, ["created_at", "updated_at", "closed_at"])
     prs_df = _to_dataframe(pr_records, ["created_at", "updated_at", "closed_at", "merged_at"])
+    commits_df = _to_dataframe(commit_records, ["date"])
+    workflows_df = _to_dataframe(workflow_records, ["run_started_at", "created_at", "updated_at"])
+    pr_reviews_df = _to_dataframe(pr_reviews_records, ["submitted_at"])
+    issue_events_df = _to_dataframe(issue_events_records, ["created_at"])
+    pr_details_df = pd.DataFrame(pr_details_records)
+    if not pr_details_df.empty and not prs_df.empty:
+        prs_df = prs_df.merge(pr_details_df, on="number", how="left")
+    for col in ["additions", "deletions", "changed_files", "review_comments_count"]:
+        if col in prs_df.columns:
+            prs_df[col] = prs_df[col].fillna(0)
+    if "draft" in prs_df.columns:
+        prs_df["draft"] = prs_df["draft"].fillna(False).astype(bool)
 
     labels_df = pd.DataFrame(
         [{"name": label.get("name"), "color": label.get("color")} for label in raw_labels]
@@ -116,6 +234,10 @@ def load_repository_data(owner: str, repo: str, token: str) -> Dict[str, pd.Data
     return {
         "issues": issues_df,
         "pulls": prs_df,
+        "commits": commits_df,
+        "workflows": workflows_df,
+        "pr_reviews": pr_reviews_df,
+        "issue_events": issue_events_df,
         "labels": labels_df,
         "milestones": milestones_df,
         "assignees": assignees_df,
