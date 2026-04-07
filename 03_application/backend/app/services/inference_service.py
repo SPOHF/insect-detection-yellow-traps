@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any, Dict, List
 
 from ultralytics import YOLO
 
 from app.core.config import get_settings
+
+logger = logging.getLogger(__name__)
+ALLOWED_IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.webp'}
 
 
 class InferenceService:
@@ -22,13 +26,26 @@ class InferenceService:
         return self._model
 
     def run(self, image_path: Path) -> List[Dict[str, Any]]:
+        image_path = Path(image_path)
+        if not image_path.exists():
+            raise ValueError(f'Image not found for inference: {image_path}')
+        suffix = image_path.suffix.lower()
+        if suffix not in ALLOWED_IMAGE_EXTENSIONS:
+            allowed = ', '.join(sorted(ALLOWED_IMAGE_EXTENSIONS))
+            raise ValueError(f'Unsupported inference image type "{suffix}". Allowed: {allowed}')
+
         model = self._get_model()
-        results = model.predict(
-            source=str(image_path),
-            imgsz=self.settings.model_image_size,
-            conf=self.settings.model_confidence,
-            verbose=False,
-        )
+        try:
+            results = model.predict(
+                source=str(image_path),
+                imgsz=self.settings.model_image_size,
+                conf=self.settings.model_confidence,
+                verbose=False,
+            )
+        except Exception as exc:
+            logger.exception('Inference prediction failed for image=%s', image_path)
+            raise RuntimeError('Inference prediction failed') from exc
+
         detections: List[Dict[str, Any]] = []
         if not results:
             return detections
