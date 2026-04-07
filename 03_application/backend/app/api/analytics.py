@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_current_user
 from app.db.session import get_db
 from app.models import FieldMap, TrapUpload, User
+from app.services.upload_visibility import apply_production_upload_filter
 
 router = APIRouter(prefix='/api/analytics', tags=['analytics'])
 
@@ -16,7 +17,9 @@ def analytics_overview(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    years_query = db.query(extract('year', TrapUpload.capture_date)).join(FieldMap, FieldMap.id == TrapUpload.field_id)
+    years_query = apply_production_upload_filter(
+        db.query(extract('year', TrapUpload.capture_date)).join(FieldMap, FieldMap.id == TrapUpload.field_id)
+    )
     if current_user.role != 'admin':
         years_query = years_query.filter(FieldMap.owner_user_id == current_user.id)
     if field_id is not None:
@@ -29,7 +32,7 @@ def analytics_overview(
     available_year_rows = years_query.distinct().order_by(extract('year', TrapUpload.capture_date)).all()
     available_years = [int(row[0]) for row in available_year_rows if row[0] is not None]
 
-    query = db.query(TrapUpload, FieldMap).join(FieldMap, FieldMap.id == TrapUpload.field_id)
+    query = apply_production_upload_filter(db.query(TrapUpload, FieldMap).join(FieldMap, FieldMap.id == TrapUpload.field_id))
     if current_user.role != 'admin':
         query = query.filter(FieldMap.owner_user_id == current_user.id)
     if field_id is not None:
@@ -43,11 +46,13 @@ def analytics_overview(
     total_detections = sum(row[0].detection_count for row in rows)
     avg_detection = (total_detections / total_uploads) if total_uploads > 0 else 0.0
 
-    daily_query = db.query(
+    daily_query = apply_production_upload_filter(
+        db.query(
         TrapUpload.capture_date.label('capture_date'),
         func.count(TrapUpload.id).label('uploads'),
         func.sum(TrapUpload.detection_count).label('detections'),
     ).join(FieldMap, FieldMap.id == TrapUpload.field_id)
+    )
     if current_user.role != 'admin':
         daily_query = daily_query.filter(FieldMap.owner_user_id == current_user.id)
     if field_id is not None:
@@ -61,12 +66,14 @@ def analytics_overview(
         .all()
     )
 
-    field_query = db.query(
+    field_query = apply_production_upload_filter(
+        db.query(
         FieldMap.id.label('field_id'),
         FieldMap.name.label('field_name'),
         func.count(TrapUpload.id).label('uploads'),
         func.sum(TrapUpload.detection_count).label('detections'),
     ).join(TrapUpload, TrapUpload.field_id == FieldMap.id)
+    )
     if current_user.role != 'admin':
         field_query = field_query.filter(FieldMap.owner_user_id == current_user.id)
     if field_id is not None:
@@ -80,11 +87,13 @@ def analytics_overview(
         .all()
     )
 
-    trap_query = db.query(
+    trap_query = apply_production_upload_filter(
+        db.query(
         TrapUpload.trap_code.label('trap_code'),
         func.count(TrapUpload.id).label('uploads'),
         func.sum(TrapUpload.detection_count).label('detections'),
     ).join(FieldMap, FieldMap.id == TrapUpload.field_id)
+    )
     if current_user.role != 'admin':
         trap_query = trap_query.filter(FieldMap.owner_user_id == current_user.id)
     if field_id is not None:
