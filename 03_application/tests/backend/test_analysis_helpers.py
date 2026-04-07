@@ -1,5 +1,13 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+from datetime import date
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+from fastapi import HTTPException
+
 from app.api import analysis as analysis_api
 
 
@@ -117,3 +125,167 @@ def test_exploratory_report_wrapper_uses_chat_result(monkeypatch) -> None:  # no
     assert out["filename"].startswith("exploratory-report-my-field-")
     assert "<html" in out["html"]
 
+
+@dataclass
+class DummyUser:
+    id: int
+    role: str = "admin"
+
+
+class _StaticQuery:
+    def __init__(self, *, first=None, all_value=None, one=None, scalars=None):
+        self._first = first
+        self._all = all_value if all_value is not None else []
+        self._one = one
+        self._scalars = list(scalars or [])
+
+    def filter(self, *args, **kwargs):  # noqa: ANN002, ANN003
+        return self
+
+    def with_entities(self, *args, **kwargs):  # noqa: ANN002, ANN003
+        return self
+
+    def group_by(self, *args, **kwargs):  # noqa: ANN002, ANN003
+        return self
+
+    def order_by(self, *args, **kwargs):  # noqa: ANN002, ANN003
+        return self
+
+    def limit(self, *args, **kwargs):  # noqa: ANN002, ANN003
+        return self
+
+    def all(self):
+        return self._all
+
+    def first(self):
+        return self._first
+
+    def one(self):
+        return self._one
+
+    def scalar(self):
+        return self._scalars.pop(0) if self._scalars else None
+
+
+class _FakeDB:
+    def __init__(self, queries):
+        self._queries = list(queries)
+
+    def query(self, *args, **kwargs):  # noqa: ANN002, ANN003
+        return self._queries.pop(0)
+
+
+def test_upload_range_validation_errors() -> None:
+    with pytest.raises(HTTPException) as exc:
+        analysis_api.upload_range(
+            start_date=date(2026, 1, 2),
+            end_date=date(2026, 1, 1),
+            field_id="f1",
+            trap_id=None,
+            trap_code=None,
+            images=[],
+            db=None,  # type: ignore[arg-type]
+            current_user=DummyUser(id=1),
+        )
+    assert exc.value.status_code == 400
+
+    with pytest.raises(HTTPException) as exc2:
+        analysis_api.upload_range(
+            start_date=date(2026, 1, 1),
+            end_date=date(2026, 1, 2),
+            field_id="f1",
+            trap_id=None,
+            trap_code=None,
+            images=[],
+            db=None,  # type: ignore[arg-type]
+            current_user=DummyUser(id=1),
+        )
+    assert exc2.value.status_code == 400
+
+
+def test_model_stats_and_list_uploads(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    metrics = tmp_path / "model_metrics.json"
+    metrics.write_text('{"precision":0.9,"recall":0.8,"mAP50":0.7}')
+    monkeypatch.setattr(
+        analysis_api,
+        "get_settings",
+        lambda: SimpleNamespace(
+            model_metrics_path=str(metrics),
+            model_weights_path="03_application/poc-model/swd_yolo_best.pt",
+            model_confidence=0.25,
+            model_image_size=640,
+        ),
+    )
+    totals = SimpleNamespace(uploads=3, detections=9, avg_confidence=0.66)
+    uploads = [SimpleNamespace(id=1)]
+    db = _FakeDB([_StaticQuery(one=totals), _StaticQuery(all_value=uploads)])
+
+    stats = analysis_api.model_stats(db=db, current_user=DummyUser(id=1))
+    assert stats["evaluation"]["precision"] == 0.9
+    assert stats["production_observed"]["total_uploads"] == 3
+
+    rows = analysis_api.list_my_uploads(db=db, current_user=DummyUser(id=1, role="admin"))
+    assert len(rows) == 1
+
+
+def test_exploratory_chat_full_fallback_and_openai(monkeypatch: pytest.MonkeyPatch) -> None:
+    selected_field = SimpleNamespace(id="field-1", name="Field 1", area_m2=100.0, owner_user_id=1)
+    totals = SimpleNamespace(uploads=4, detections=10, avg_confidence=0.75)
+    by_field = [SimpleNamespace(field_id="field-1", uploads=4, detections=10)]
+    by_trap = [SimpleNamespace(trap_code="R01-P01", uploads=3, detections=8)]
+    recent = [SimpleNamespace(id=1, field_id="field-1", trap_code="R01-P01", capture_date=date(2026, 1, 2), detection_count=3)]
+    weekly_pop = [SimpleNamespace(week_start=date(2026, 1, 1), uploads=4, avg_population=2.5, total_population=10)]
+    weekly_weather = [SimpleNamespace(week_start=date(2026, 1, 1), temp_avg=10.0, rain_sum=1.0, gdd_avg=0.5, deficit_avg=0.2, heat_stress_avg=0.0)]
+    base_query = _StaticQuery(
+        one=totals,
+        all_value=recent,
+        scalars=[date(2026, 1, 10), date(2026, 1, 1)],
+    )
+    db = _FakeDB(
+        [
+            _StaticQuery(first=selected_field),
+            base_query,
+            _StaticQuery(all_value=by_field),
+            _StaticQuery(all_value=by_trap),
+            _StaticQuery(all_value=weekly_pop),
+            _StaticQuery(),
+            _StaticQuery(all_value=weekly_weather),
+        ]
+    )
+    monkeypatch.setattr(
+        analysis_api,
+        "get_settings",
+        lambda: SimpleNamespace(openai_api_key="", openai_chat_model="gpt-4o-mini"),
+    )
+    out = analysis_api.exploratory_chat(
+        {"question": "How are we doing?", "field_id": "field-1", "all_data": True},
+        db=db,
+        current_user=DummyUser(id=1, role="admin"),
+    )
+    assert out["used_openai"] is False
+    assert out["context"]["totals"]["uploads"] == 4
+
+    class _Resp:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"output": [{"content": [{"text": "Model answer"}]}], "output_text": ""}
+
+    db2 = _FakeDB(
+        [
+            _StaticQuery(one=totals, all_value=[], scalars=[None]),
+            _StaticQuery(all_value=[]),
+            _StaticQuery(all_value=[]),
+            _StaticQuery(all_value=[]),
+        ]
+    )
+    monkeypatch.setattr(
+        analysis_api,
+        "get_settings",
+        lambda: SimpleNamespace(openai_api_key="x", openai_chat_model="gpt-4o-mini"),
+    )
+    monkeypatch.setattr(analysis_api.requests, "post", lambda *args, **kwargs: _Resp())
+    out2 = analysis_api.exploratory_chat({"question": "status"}, db=db2, current_user=DummyUser(id=1, role="admin"))
+    assert out2["used_openai"] is True
+    assert "Model answer" in out2["answer"]

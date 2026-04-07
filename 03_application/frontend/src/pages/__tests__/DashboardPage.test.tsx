@@ -164,4 +164,80 @@ describe('DashboardPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Ask Chatbot' }));
     await waitFor(() => expect(postMock).toHaveBeenCalledWith('/api/analysis/exploratory-report', expect.any(Object), 'token-1'));
   });
+
+  it('renders model and settings sections and supports logout', async () => {
+    render(<DashboardPage />);
+    fireEvent.click(screen.getByRole('button', { name: /Insect Model Overview/i }));
+    await waitFor(() => expect(screen.getByText('Insect Model Overview')).toBeInTheDocument());
+    expect(screen.getByText(/Model file:/)).toBeInTheDocument();
+    expect(screen.getByText(/Observed Platform Performance/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Home' }));
+    fireEvent.click(screen.getByRole('button', { name: /Account Settings/i }));
+    await waitFor(() => expect(screen.getByText('Settings')).toBeInTheDocument());
+    expect(screen.getByText(/Access scope:/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Logout' }));
+    expect(logoutMock).toHaveBeenCalled();
+  });
+
+  it('triggers environment sync and chart refresh in analytics', async () => {
+    postMock.mockResolvedValueOnce({ ok: true });
+    render(<DashboardPage />);
+    fireEvent.click(screen.getByRole('button', { name: /Monitoring Analytics/i }));
+    await waitFor(() => expect(screen.getByText('Environmental Data (Field Weather + Derived Metrics)')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Fetch / Update Environmental Data' }));
+    await waitFor(() => expect(postMock).toHaveBeenCalledWith('/api/environment/fields/field-1/sync', {}, 'token-1'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh Charts' }));
+    await waitFor(() =>
+      expect(getMock).toHaveBeenCalledWith(
+        expect.stringContaining('/api/environment/fields/field-1/timeseries?'),
+        'token-1'
+      )
+    );
+  });
+
+  it('validates upload requirements and then uploads successfully', async () => {
+    render(<DashboardPage />);
+
+    fireEvent.click(screen.getByRole('button', { name: /Upload Trap Images/i }));
+    await waitFor(() => expect(screen.getByText('Upload Trap Images to Selected Trap')).toBeInTheDocument());
+
+    const uploadButton = screen.getByRole('button', { name: 'Upload + Run Model' });
+    fireEvent.submit(uploadButton.closest('form')!);
+    await waitFor(() => expect(screen.getByText('Select at least one image')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Select Trap' }));
+    await waitFor(() => expect(screen.getByText('Trap 1')).toBeInTheDocument());
+
+    fireEvent.change(screen.getByLabelText('Start Date'), { target: { value: '2026-04-01' } });
+    fireEvent.change(screen.getByLabelText('End Date'), { target: { value: '2026-04-02' } });
+    const file = new File(['img'], 'trap.jpg', { type: 'image/jpeg' });
+    const imagesInput = screen.getByLabelText('Images') as HTMLInputElement;
+    Object.defineProperty(imagesInput, 'files', { value: [file] });
+    fireEvent.change(imagesInput);
+
+    fireEvent.submit(uploadButton.closest('form')!);
+    await waitFor(() => expect(postFormMock).toHaveBeenCalledWith('/api/analysis/upload-range', expect.any(FormData), 'token-1'));
+  });
+
+  it('handles exploratory validation and backend error response', async () => {
+    postMock.mockRejectedValueOnce(new Error('Chat failed'));
+
+    render(<DashboardPage />);
+    fireEvent.click(screen.getByRole('button', { name: /Exploratory Analysis/i }));
+    await waitFor(() => expect(screen.getByText('Data Chatbot')).toBeInTheDocument());
+
+    fireEvent.change(screen.getAllByRole('combobox')[0], { target: { value: '' } });
+    fireEvent.change(screen.getByLabelText('Ask a question'), { target: { value: 'status?' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Ask Chatbot' }));
+    await waitFor(() => expect(screen.getByText('Select a field first for exploratory analysis.')).toBeInTheDocument());
+
+    fireEvent.change(screen.getAllByRole('combobox')[0], { target: { value: 'field-1' } });
+    fireEvent.change(screen.getByLabelText('Ask a question'), { target: { value: 'status now?' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Ask Chatbot' }));
+    await waitFor(() => expect(screen.getByText('Chat failed')).toBeInTheDocument());
+  });
 });
