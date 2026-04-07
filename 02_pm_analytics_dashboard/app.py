@@ -76,6 +76,7 @@ def _get_config(name: str, default: str = "") -> str:
         if name in st.secrets:
             return str(st.secrets[name])
     except Exception:
+        # st.secrets may be unavailable depending on runtime; fall back to environment variables.
         pass
     return str(os.getenv(name, default))
 
@@ -2105,7 +2106,6 @@ with pm_tab:
     total_weight = int(progress_blocks["weight"].sum()) if not progress_blocks.empty else 0
     done_weight = int(progress_blocks.loc[progress_blocks["status"] == "done", "weight"].sum()) if not progress_blocks.empty else 0
     completion_pct = (done_weight / total_weight * 100) if total_weight > 0 else 0.0
-    remaining_weight = max(total_weight - done_weight, 0)
 
     phase_start, phase_end = _delivery_window(scope_issues, milestones_df, milestone_filter)
     now_ts = pd.Timestamp.now(tz="UTC")
@@ -2364,11 +2364,12 @@ with defects_tab:
         ]
         reopen_rate = (reopened["issue_number"].nunique() / max(len(defect_numbers), 1)) * 100.0
 
-    b1, b2, b3, b4 = st.columns(4)
+    b1, b2, b3, b4, b5 = st.columns(5)
     b1.metric("Bug Rate", f"{bug_rate:.1f}%")
     b2.metric("Open Bugs", open_bugs)
-    b3.metric("Median Time to Resolution", fmt_days(bug_ttr_days))
-    b4.metric("Reopen Rate", fmt_pct(reopen_rate))
+    b3.metric("Closed Bugs", closed_bugs)
+    b4.metric("Median Time to Resolution", fmt_days(bug_ttr_days))
+    b5.metric("Reopen Rate", fmt_pct(reopen_rate))
 
     bl, br = st.columns(2)
     with bl:
@@ -2418,7 +2419,6 @@ with collab_tab:
         bus_factor = float(dist.iloc[0] * 100.0)
 
     review_comments = int(scoped_prs["review_comments_count"].fillna(0).sum()) if "review_comments_count" in scoped_prs.columns else 0
-    avg_review_comments = review_comments / max(len(scoped_prs), 1) if len(scoped_prs) else 0.0
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Review Participants", review_participants)
     col2.metric("Review Participation", f"{review_participation_rate:.1f}%")
