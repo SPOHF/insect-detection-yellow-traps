@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 from pathlib import Path
+import re
 from typing import List
 from uuid import uuid4
 
@@ -9,6 +10,7 @@ from fastapi import UploadFile
 
 ALLOWED_IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.webp'}
 MAX_UPLOAD_SIZE_MB = 20
+_DATASET_FILENAME_MARKER = re.compile(r"(^|[^a-z])(train|training|valid|validation|test)([^a-z]|$)", re.IGNORECASE)
 
 
 def secure_filename(name: str) -> str:
@@ -35,6 +37,9 @@ def validate_upload_file(upload: UploadFile) -> None:
     filename = upload.filename or ''
     if not filename:
         raise ValueError('Upload file must have a filename')
+
+    if _DATASET_FILENAME_MARKER.search(filename):
+        raise ValueError('Training/validation/test dataset images are not allowed for production upload endpoints')
 
     suffix = Path(filename).suffix.lower()
     if suffix not in ALLOWED_IMAGE_EXTENSIONS:

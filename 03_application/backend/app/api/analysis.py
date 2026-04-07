@@ -20,6 +20,7 @@ from app.services.graph_service import GraphService
 from app.services.environment_service import infer_sync_start_date, sync_environment_for_field
 from app.services.inference_service import InferenceService
 from app.services.upload_service import allocate_capture_dates, save_upload_file, validate_upload_file
+from app.services.upload_visibility import apply_production_upload_filter
 
 router = APIRouter(prefix='/api/analysis', tags=['analysis'])
 logger = logging.getLogger(__name__)
@@ -175,7 +176,7 @@ def list_my_uploads(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    query = db.query(TrapUpload)
+    query = apply_production_upload_filter(db.query(TrapUpload))
     if current_user.role != 'admin':
         query = query.filter(TrapUpload.user_id == current_user.id)
     return query.order_by(TrapUpload.created_at.desc()).limit(200).all()
@@ -196,11 +197,12 @@ def model_stats(
         except Exception:
             metrics_payload = {}
 
-    totals = db.query(
+    totals_query = db.query(
         func.count(TrapUpload.id).label('uploads'),
         func.coalesce(func.sum(TrapUpload.detection_count), 0).label('detections'),
         func.coalesce(func.avg(TrapUpload.confidence_avg), 0.0).label('avg_confidence'),
-    ).one()
+    )
+    totals = apply_production_upload_filter(totals_query).one()
 
     return {
         'model': {
@@ -260,7 +262,7 @@ def exploratory_chat(
         if current_user.role != 'admin' and selected_field.owner_user_id != current_user.id:
             raise HTTPException(status_code=403, detail='Forbidden')
 
-    base_upload_query = db.query(TrapUpload)
+    base_upload_query = apply_production_upload_filter(db.query(TrapUpload))
     if current_user.role != 'admin':
         base_upload_query = base_upload_query.filter(TrapUpload.user_id == current_user.id)
     if selected_field is not None:

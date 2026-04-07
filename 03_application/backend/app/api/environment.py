@@ -10,6 +10,7 @@ from app.api.deps import get_current_user
 from app.db.session import get_db
 from app.models import EnvironmentalDaily, EnvironmentalSourceDaily, FieldMap, TrapUpload, User
 from app.services.environment_service import infer_sync_end_date, infer_sync_start_date, sync_environment_for_field
+from app.services.upload_visibility import apply_production_upload_filter
 
 router = APIRouter(prefix='/api/environment', tags=['environment'])
 
@@ -129,7 +130,7 @@ def environment_field_timeseries(
     field = _get_field_or_403(db, field_id, current_user)
 
     # derive range from most recent upload/environment date
-    upload_query = db.query(TrapUpload).filter(TrapUpload.field_id == field.id)
+    upload_query = apply_production_upload_filter(db.query(TrapUpload)).filter(TrapUpload.field_id == field.id)
     env_query = db.query(EnvironmentalDaily).filter(EnvironmentalDaily.field_id == field.id)
     if year is not None:
         upload_query = upload_query.filter(extract('year', TrapUpload.capture_date) == year)
@@ -152,11 +153,13 @@ def environment_field_timeseries(
         window_weeks = weeks
 
     pop_rows = (
-        db.query(
+        apply_production_upload_filter(
+            db.query(
             func.date_trunc('week', TrapUpload.capture_date).label('week_start'),
             func.count(TrapUpload.id).label('uploads'),
             func.coalesce(func.avg(TrapUpload.detection_count), 0.0).label('avg_population'),
             func.coalesce(func.sum(TrapUpload.detection_count), 0).label('total_population'),
+        )
         )
         .filter(
             and_(
@@ -172,12 +175,14 @@ def environment_field_timeseries(
     )
 
     trap_weekly_rows = (
-        db.query(
+        apply_production_upload_filter(
+            db.query(
             func.date_trunc('week', TrapUpload.capture_date).label('week_start'),
             TrapUpload.trap_code.label('trap_code'),
             func.count(TrapUpload.id).label('uploads'),
             func.coalesce(func.avg(TrapUpload.detection_count), 0.0).label('avg_population'),
             func.coalesce(func.sum(TrapUpload.detection_count), 0).label('total_population'),
+        )
         )
         .filter(
             and_(
