@@ -1,0 +1,46 @@
+name: Sync 02 Dashboard To Fork
+
+on:
+  push:
+    branches: ["develop"]
+    paths:
+      - "02_pm_analytics_dashboard/**"
+      - ".github/workflows/sync-02-dashboard.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  sync-dashboard:
+    if: ${{ !contains(github.event.head_commit.message, '[skip ci]') }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Check sync secrets
+        id: secrets_check
+        env:
+          TARGET_REPO: ${{ secrets.PM_DASHBOARD_TARGET_REPO }}
+          SYNC_TOKEN: ${{ secrets.PM_DASHBOARD_SYNC_TOKEN }}
+        run: |
+          if [ -z "$TARGET_REPO" ] || [ -z "$SYNC_TOKEN" ]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "Dashboard sync skipped: missing PM_DASHBOARD_TARGET_REPO and/or PM_DASHBOARD_SYNC_TOKEN."
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Push subtree to target repo
+        if: ${{ steps.secrets_check.outputs.enabled == 'true' }}
+        env:
+          TARGET_REPO: ${{ secrets.PM_DASHBOARD_TARGET_REPO }}
+          TARGET_BRANCH: ${{ secrets.PM_DASHBOARD_TARGET_BRANCH }}
+          SYNC_TOKEN: ${{ secrets.PM_DASHBOARD_SYNC_TOKEN }}
+        run: |
+          BRANCH="${TARGET_BRANCH:-main}"
+          git subtree split --prefix=02_pm_analytics_dashboard -b sdlc-sync-branch
+          git push "https://x-access-token:${SYNC_TOKEN}@github.com/${TARGET_REPO}.git" "sdlc-sync-branch:${BRANCH}" --force
