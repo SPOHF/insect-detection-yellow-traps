@@ -2,11 +2,13 @@ import json
 from collections import defaultdict
 from datetime import date
 from html import escape
+import mimetypes
 from pathlib import Path
 import re
 import logging
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi.responses import FileResponse
 from sqlalchemy import and_, extract, func
 from sqlalchemy.orm import Session
 import requests
@@ -271,6 +273,33 @@ def get_upload_prediction_result(
             for detection in detections
         ],
     )
+
+
+@router.get('/uploads/{upload_id}/image')
+def get_upload_image(
+    upload_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    upload = db.query(TrapUpload).filter(TrapUpload.id == upload_id).first()
+    if upload is None or (current_user.role != 'admin' and upload.user_id != current_user.id):
+        raise HTTPException(status_code=404, detail='Upload not found')
+
+    settings = get_settings()
+    upload_root = Path(settings.upload_dir).expanduser().resolve()
+    stored_path = Path(upload.image_path).expanduser()
+    resolved_path = (stored_path if stored_path.is_absolute() else (Path.cwd() / stored_path)).resolve()
+
+    try:
+        resolved_path.relative_to(upload_root)
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail='Upload image is outside the configured storage root') from exc
+
+    if not resolved_path.is_file():
+        raise HTTPException(status_code=404, detail='Upload image file not found on disk')
+
+    media_type = mimetypes.guess_type(resolved_path.name)[0] or 'application/octet-stream'
+    return FileResponse(path=resolved_path, media_type=media_type, filename=resolved_path.name)
 
 
 @router.get('/model-stats')
