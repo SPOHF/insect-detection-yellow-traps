@@ -2,6 +2,11 @@
 
 All experimental modeling/training work is located here.
 
+## Dataset
+
+- 97 images
+- Instance segmentation annotations
+
 ## Contents
 
 - `src/` -> modeling code and CV core modules
