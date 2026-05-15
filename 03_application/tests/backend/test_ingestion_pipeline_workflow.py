@@ -324,6 +324,71 @@ def test_get_upload_prediction_result_enforces_upload_ownership(
     assert exc.value.status_code == 404
 
 
+def test_get_upload_image_returns_file_response_for_owner(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    db_session: Session,
+    ingestion_user_and_field: tuple[User, FieldMap],
+) -> None:
+    user, field = ingestion_user_and_field
+    upload_dir = tmp_path / "uploads"
+    image_dir = upload_dir / "field-ingestion" / "2026" / "05" / "02" / "FIELD_BATCH"
+    image_dir.mkdir(parents=True, exist_ok=True)
+    image_path = image_dir / "open-image.jpg"
+    image_path.write_bytes(JPEG_BYTES)
+
+    upload = TrapUpload(
+        user_id=user.id,
+        field_id=field.id,
+        trap_id=None,
+        trap_code="FIELD_BATCH",
+        capture_date=date(2026, 5, 2),
+        image_path=str(image_path),
+        detection_count=0,
+        confidence_avg=0.0,
+    )
+    db_session.add(upload)
+    db_session.commit()
+
+    monkeypatch.setattr(analysis_api, "get_settings", lambda: SimpleNamespace(upload_dir=str(upload_dir)))
+    response = analysis_api.get_upload_image(upload.id, db=db_session, current_user=user)
+
+    assert response.status_code == 200
+    assert Path(response.path) == image_path
+    assert response.media_type == "image/jpeg"
+
+
+def test_get_upload_image_rejects_paths_outside_configured_upload_root(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    db_session: Session,
+    ingestion_user_and_field: tuple[User, FieldMap],
+) -> None:
+    user, field = ingestion_user_and_field
+    upload_dir = tmp_path / "uploads"
+    outside_path = tmp_path / "outside.jpg"
+    outside_path.write_bytes(JPEG_BYTES)
+
+    upload = TrapUpload(
+        user_id=user.id,
+        field_id=field.id,
+        trap_id=None,
+        trap_code="FIELD_BATCH",
+        capture_date=date(2026, 5, 2),
+        image_path=str(outside_path),
+        detection_count=0,
+        confidence_avg=0.0,
+    )
+    db_session.add(upload)
+    db_session.commit()
+
+    monkeypatch.setattr(analysis_api, "get_settings", lambda: SimpleNamespace(upload_dir=str(upload_dir)))
+    with pytest.raises(HTTPException) as exc:
+        analysis_api.get_upload_image(upload.id, db=db_session, current_user=user)
+
+    assert exc.value.status_code == 403
+
+
 def test_upload_range_rejects_invalid_batch_before_storage(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

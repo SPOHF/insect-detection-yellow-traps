@@ -5,6 +5,7 @@ const getMock = vi.fn();
 const postMock = vi.fn();
 const postFormMock = vi.fn();
 const getTextMock = vi.fn();
+const getBlobMock = vi.fn();
 const logoutMock = vi.fn();
 
 vi.mock('../../api/client', () => ({
@@ -13,6 +14,7 @@ vi.mock('../../api/client', () => ({
     post: (...args: unknown[]) => postMock(...args),
     postForm: (...args: unknown[]) => postFormMock(...args),
     getText: (...args: unknown[]) => getTextMock(...args),
+    getBlob: (...args: unknown[]) => getBlobMock(...args),
   },
 }));
 
@@ -203,11 +205,14 @@ describe('DashboardPage', () => {
     postMock.mockReset();
     postFormMock.mockReset();
     getTextMock.mockReset();
+    getBlobMock.mockReset();
     Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: vi.fn(() => 'blob:insights') });
     Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: vi.fn() });
     vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => undefined);
+    vi.spyOn(window, 'open').mockImplementation(() => ({ closed: false } as Window));
     setupGetMocks();
     getTextMock.mockResolvedValue('report,Insight dashboard export\n');
+    getBlobMock.mockResolvedValue(new Blob(['image-bytes'], { type: 'image/jpeg' }));
     postMock.mockResolvedValue({
       answer: 'ok',
       used_openai: false,
@@ -225,6 +230,17 @@ describe('DashboardPage', () => {
     await waitFor(() => expect(screen.getByText('Environmental Data (Field Weather + Derived Metrics)')).toBeInTheDocument());
     expect(screen.getAllByText(/Scope:/i).length).toBeGreaterThan(0);
     expect(screen.getByText(/Totals/)).toBeInTheDocument();
+  });
+
+  it('opens insight image from analytics table', async () => {
+    render(<DashboardPage />);
+    fireEvent.click(screen.getByRole('button', { name: /Monitoring Analytics/i }));
+    await waitFor(() => expect(screen.getByText('Environmental Data (Field Weather + Derived Metrics)')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: 'View Image' }));
+
+    await waitFor(() => expect(getBlobMock).toHaveBeenCalledWith('/api/analysis/uploads/1/image', 'token-1'));
+    expect(window.open).toHaveBeenCalledWith('blob:insights', '_blank', 'noopener,noreferrer');
   });
 
   it('handles upload trap selection and exploratory chat flow', async () => {
@@ -317,7 +333,7 @@ describe('DashboardPage', () => {
       expect(getMock).toHaveBeenCalledWith(expect.stringContaining('max_detections=10'), 'token-1');
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Open' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Details' }));
     await waitFor(() => expect(screen.getByText('Image Result #1')).toBeInTheDocument());
     expect(screen.getByText(/class=0, confidence=0.810/)).toBeInTheDocument();
 

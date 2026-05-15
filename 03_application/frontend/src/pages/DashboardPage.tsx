@@ -406,6 +406,22 @@ export default function DashboardPage() {
     }
   };
 
+  const openInsightImage = async (uploadId: number) => {
+    if (!token) return;
+    setError('');
+    try {
+      const imageBlob = await apiClient.getBlob(`/api/analysis/uploads/${uploadId}/image`, token);
+      const href = URL.createObjectURL(imageBlob);
+      const opened = window.open(href, '_blank', 'noopener,noreferrer');
+      if (!opened) {
+        setError('Popup blocked while opening image. Allow popups and try again.');
+      }
+      setTimeout(() => URL.revokeObjectURL(href), 60_000);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to open image');
+    }
+  };
+
   const loadModelStats = async () => {
     if (!token) return;
     const payload = await apiClient.get<ModelStats>('/api/analysis/model-stats', token);
@@ -951,9 +967,14 @@ export default function DashboardPage() {
                         <td>{fmt(row.confidence_avg, 2)}</td>
                         <td>{row.detections.length}</td>
                         <td>
-                          <button type="button" className="link-btn table-action" onClick={() => void inspectInsightUpload(row.upload_id)}>
-                            Open
-                          </button>
+                          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                            <button type="button" className="link-btn table-action" onClick={() => void openInsightImage(row.upload_id)}>
+                              View Image
+                            </button>
+                            <button type="button" className="link-btn table-action" onClick={() => void inspectInsightUpload(row.upload_id)}>
+                              Details
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))}
