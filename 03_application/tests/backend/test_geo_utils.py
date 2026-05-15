@@ -1,3 +1,11 @@
+"""
+File Purpose: test_geo_utils.py module
+Inputs: Imported modules, function arguments, request payloads where applicable.
+Outputs: Return values, API responses, and side effects documented in functions/classes.
+Process: Implements module-specific business or UI logic.
+Authorship: Louis Ferger-Andrews (@LouisFerger-Andrews)
+"""
+
 from __future__ import annotations
 
 from app.utils.geo import assign_grid_codes, point_in_polygon, polygon_area_m2

@@ -1,1 +1,0 @@
-"""Classical CV approach implementation."""

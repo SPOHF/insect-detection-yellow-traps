@@ -1,3 +1,11 @@
+/**
+ * File Purpose: App.test.tsx
+ * Inputs: Component props, API payloads, and user interactions where applicable.
+ * Outputs: Rendered UI, API calls, and state updates.
+ * Process: Implements module-specific frontend behavior.
+ * Authorship: Louis Ferger-Andrews (@LouisFerger-Andrews)
+ */
+
 import { render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import App from '../App';

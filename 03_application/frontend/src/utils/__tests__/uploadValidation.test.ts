@@ -1,3 +1,11 @@
+/**
+ * File Purpose: uploadValidation.test.ts
+ * Inputs: Component props, API payloads, and user interactions where applicable.
+ * Outputs: Rendered UI, API calls, and state updates.
+ * Process: Implements module-specific frontend behavior.
+ * Authorship: Louis Ferger-Andrews (@LouisFerger-Andrews)
+ */
+
 import { describe, expect, it } from 'vitest';
 import { validateUploadInput } from '../uploadValidation';
 

@@ -1,3 +1,11 @@
+/**
+ * File Purpose: setup.ts
+ * Inputs: Component props, API payloads, and user interactions where applicable.
+ * Outputs: Rendered UI, API calls, and state updates.
+ * Process: Implements module-specific frontend behavior.
+ * Authorship: Louis Ferger-Andrews (@LouisFerger-Andrews)
+ */
+
 import '@testing-library/jest-dom/vitest';
 
 const store = new Map<string, string>();
