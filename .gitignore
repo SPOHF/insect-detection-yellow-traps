@@ -10,6 +10,7 @@ projects/*/data/
 03_application/frontend/node_modules/
 03_application/frontend/dist/
 03_application/frontend/coverage/
+03_application/frontend/tsconfig.tsbuildinfo
 03_application/backend/storage/uploads/
 03_application/backend/.env
 03_application/backend/.coverage_backend.json
@@ -19,9 +20,7 @@ projects/*/data/
 03_application/frontend/*.pid
 
 # Local raw datasets (never commit)
-04_modeling_experimental/data/raw/
-04_modeling_experimental/data/**/2024/
-04_modeling_experimental/data/**/2025/
+04_ml_insect_detection_model/**/*.log
 
 # Never commit image binaries from local datasets/runs
 *.jpg

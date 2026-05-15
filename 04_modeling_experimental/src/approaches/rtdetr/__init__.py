@@ -1,1 +1,0 @@
-"""RT-DETR approach implementation."""
