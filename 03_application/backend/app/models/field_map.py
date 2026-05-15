@@ -1,3 +1,11 @@
+"""
+File Purpose: field map module
+Inputs: Imported modules, function arguments, request payloads where applicable.
+Outputs: Return values, API responses, and side effects documented in functions/classes.
+Process: Implements module-specific business or UI logic.
+Authorship: Louis Ferger-Andrews (@LouisFerger-Andrews)
+"""
+
 from datetime import datetime
 
 from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text

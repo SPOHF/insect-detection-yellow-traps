@@ -1,3 +1,11 @@
+/**
+ * File Purpose: uploadValidation.ts
+ * Inputs: Component props, API payloads, and user interactions where applicable.
+ * Outputs: Rendered UI, API calls, and state updates.
+ * Process: Implements module-specific frontend behavior.
+ * Authorship: Louis Ferger-Andrews (@LouisFerger-Andrews)
+ */
+
 export const ACCEPTED_UPLOAD_EXTENSIONS = ['.jpg', '.jpeg', '.png', '.webp'] as const;
 export const MAX_UPLOAD_SIZE_MB = 20;
 const MAX_UPLOAD_SIZE_BYTES = MAX_UPLOAD_SIZE_MB * 1024 * 1024;

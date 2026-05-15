@@ -1,3 +1,11 @@
+/**
+ * File Purpose: AdminPage.test.tsx
+ * Inputs: Component props, API payloads, and user interactions where applicable.
+ * Outputs: Rendered UI, API calls, and state updates.
+ * Process: Implements module-specific frontend behavior.
+ * Authorship: Louis Ferger-Andrews (@LouisFerger-Andrews)
+ */
+
 import { render, screen, waitFor } from '@testing-library/react';
 import AdminPage from '../AdminPage';
 
