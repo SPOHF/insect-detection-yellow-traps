@@ -15,14 +15,8 @@
 - `docker-compose.yml`: infrastructure (Postgres, Neo4j)
 - `docker-compose.app.yml`: app service composition
 
-## 4) `04_modeling_experimental/`
-- `src/`: modeling and reusable CV core logic
-- `configs/`: modeling/training configs
-- `data/`: experimental datasets
-- `runs/`: training/evaluation outputs
-- `scripts/`: modeling automation scripts
-- `tests/`: model/core/backend tests
-- `weights/`: model weight files
+## 4) `04_ml_insect_detection_model/`
+- `weights/`: model weight files only
 
 ## Root-level system folders
 - `.git/`, `.github/`, `.venv/`, `.pytest_cache/` (tooling/system folders)

@@ -1,3 +1,11 @@
+/**
+ * File Purpose: DashboardPage.tsx
+ * Inputs: Component props, API payloads, and user interactions where applicable.
+ * Outputs: Rendered UI, API calls, and state updates.
+ * Process: Implements module-specific frontend behavior.
+ * Authorship: Louis Ferger-Andrews (@LouisFerger-Andrews)
+ */
+
 import { useEffect, useMemo, useState } from 'react';
 import { apiClient } from '../api/client';
 import FieldMapManager from '../components/FieldMapManager';

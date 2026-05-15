@@ -2,6 +2,10 @@
 
 End-to-end local platform for monitoring *Drosophila suzukii* on yellow sticky traps.
 
+This repo is now kept intentionally simple:
+- `03_application/` is the product code you run.
+- `04_ml_insect_detection_model/` stores model weight files only.
+
 ## Repository Layout
 
 This repository is organized into four top-level folders:
@@ -9,7 +13,7 @@ This repository is organized into four top-level folders:
 - `01_project_docs_notes/` -> documentation and notes
 - `02_pm_analytics_dashboard/` -> internal Streamlit PM dashboard
 - `03_application/` -> production app (backend, frontend, runtime model, compose files)
-- `04_modeling_experimental/` -> CV/model experimentation (src, configs, data, runs, scripts, tests)
+- `04_ml_insect_detection_model/` -> model weight files only
 
 ## Quickstart: run the application locally
 
@@ -191,33 +195,6 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r 02_pm_analytics_dashboard/requirements.txt
 streamlit run 02_pm_analytics_dashboard/app.py
-```
-
-## Modeling workflow
-
-### CLI examples
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-
-PYTHONPATH=04_modeling_experimental/src .venv/bin/python -m cli list-approaches
-PYTHONPATH=04_modeling_experimental/src .venv/bin/python -m cli prepare-data --project insect_yellow --approach yolo --config 04_modeling_experimental/configs/yolo.yaml
-PYTHONPATH=04_modeling_experimental/src .venv/bin/python -m cli train --project insect_yellow --approach yolo --config 04_modeling_experimental/configs/yolo.yaml
-PYTHONPATH=04_modeling_experimental/src .venv/bin/python -m cli evaluate --project insect_yellow --approach yolo --config 04_modeling_experimental/configs/yolo.yaml
-```
-
-### Strong YOLO script
-
-```bash
-./04_modeling_experimental/scripts/train_strong_yolo.sh
-```
-
-## Quality checks
-
-```bash
-./04_modeling_experimental/scripts/check_quality.sh
 ```
 
 ## Additional docs
