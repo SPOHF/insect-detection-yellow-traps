@@ -1,5 +1,14 @@
-"""YOLO2026 segmentation package.
+from .config import EvalConfig, InferConfig, TrainConfig, load_eval_config, load_infer_config, load_train_config
+from .infer import run_inference
+from .train import run_training
 
-This package organizes data, model, training, evaluation, inference, and
-export steps for insect detection with cross-validation-based model selection.
-"""
+__all__ = [
+    "TrainConfig",
+    "EvalConfig",
+    "InferConfig",
+    "load_train_config",
+    "load_eval_config",
+    "load_infer_config",
+    "run_training",
+    "run_inference",
+]

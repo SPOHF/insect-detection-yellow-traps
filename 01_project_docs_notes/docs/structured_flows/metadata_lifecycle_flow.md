@@ -6,7 +6,7 @@ Define how metadata is captured, validated, persisted, retrieved, and audited ac
 ## Lifecycle stages
 
 1. Definition
-- Canonical fields are defined in schema docs (`docs/metadata/` branch).
+- Canonical fields are defined in schema docs (`../metadata/`).
 - Required identifiers: `field_id`, `trap_code`, `capture_date`, operator/device context.
 
 2. Capture

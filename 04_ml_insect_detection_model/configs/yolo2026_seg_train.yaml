@@ -1,24 +1,23 @@
-# Methodology (train):
-# 1) Train YOLO segmentation with consistent hyperparameters.
-# 2) Run K-fold cross-validation to reduce split bias.
-# 3) Save per-fold metrics and checkpoints.
-# 4) Select the best setup using mean validation score.
+# Input
+# Set to your YOLO segmentation dataset yaml.
+data_yaml: 04_ml_insect_detection_model/data/data.yaml
 
-experiment_name: yolo2026_seg_train
-model_architecture: yolov8n-seg
+# Process
+model_architecture: yolo26m-seg.pt
 img_size: 1024
 epochs: 100
 batch_size: 8
 learning_rate: 0.001
+project: runs/train
+experiment_name: yolo2026_seg
 
 cross_validation:
   enabled: true
   folds: 5
-  strategy: stratified
+  seed: 42
+  group_delimiter: "__"
   selection_metric: map50_95
-  best_model_rule: highest_mean_across_folds
 
+# Output
 outputs:
-  save_fold_models: true
-  save_fold_metrics: true
-  best_model_path: weights/yolo2026_seg_best.pt
+  best_model_path: 04_ml_insect_detection_model/weights/yolo2026_seg_best.pt
