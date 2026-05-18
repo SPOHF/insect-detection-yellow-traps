@@ -1,19 +1,15 @@
-# Methodology (infer):
-# 1) Load the model selected from cross-validation.
-# 2) Run inference on new trap images.
-# 3) Save predictions for review and downstream counting.
+# Input
+model_path: 04_ml_insect_detection_model/weights/yolo2026_seg_best.pt
+inputs:
+  source_dir: data/infer/images
 
-experiment_name: yolo2026_seg_infer
-model_path: weights/yolo2026_seg_best.pt
+# Process
 img_size: 1024
 confidence_threshold: 0.25
 iou_threshold: 0.50
 max_detections: 300
 
-inputs:
-  source_dir: data/infer/images
-
+# Output
 outputs:
   save_visualizations: true
-  save_masks: true
   output_dir: runs/infer

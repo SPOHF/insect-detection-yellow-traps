@@ -1,27 +1,59 @@
-"""Methodology for infer module.
+from __future__ import annotations
 
-Purpose:
-Run production-style prediction on new trap images using the selected best
-model from CV.
+from pathlib import Path
+from typing import Any
 
-What this file should implement:
-1. Model loading:
-- Load the final selected checkpoint and verify class metadata.
+from .config import InferConfig
+from .model import build_model
+from .utils import dump_json, ensure_dir, to_float
 
-2. Inference pipeline:
-- Read input images in batches.
-- Apply the same preprocessing family used in validation.
-- Run model forward pass and confidence/NMS filtering.
 
-3. Output generation:
-- Save boxes, classes, confidences, and segmentation masks/polygons.
-- Save optional visualization overlays for quick manual review.
+def _extract_prediction(result: Any) -> dict[str, Any]:
+    boxes = result.boxes
+    names = result.names
+    rows = []
 
-4. Operational safety checks:
-- Handle unreadable/corrupt images gracefully.
-- Log skipped files and inference timing statistics.
+    if boxes is None:
+        return {"image": str(result.path), "detections": []}
 
-5. Export-ready format:
-- Write outputs in stable schema (json/csv) for downstream counting and
-  analytics.
-"""
+    xyxy = boxes.xyxy.cpu().numpy() if boxes.xyxy is not None else []
+    conf = boxes.conf.cpu().numpy() if boxes.conf is not None else []
+    cls = boxes.cls.cpu().numpy() if boxes.cls is not None else []
+
+    for i in range(len(conf)):
+        cid = int(cls[i])
+        rows.append(
+            {
+                "class_id": cid,
+                "class_name": str(names.get(cid, cid)),
+                "confidence": to_float(conf[i]),
+                "bbox_xyxy": [to_float(v) for v in xyxy[i]],
+            }
+        )
+
+    return {"image": str(result.path), "detections": rows}
+
+
+def run_inference(cfg: InferConfig) -> Path:
+    ensure_dir(cfg.out_dir)
+    model = build_model(str(cfg.model_path))
+
+    results = model.predict(
+        source=str(cfg.source),
+        task="segment",
+        imgsz=cfg.imgsz,
+        conf=cfg.conf,
+        iou=cfg.iou,
+        max_det=cfg.max_det,
+        device=cfg.device or None,
+        save=cfg.save_vis,
+        project=str(cfg.out_dir),
+        name="predict",
+        exist_ok=True,
+        verbose=False,
+    )
+
+    payload = [_extract_prediction(r) for r in results]
+    out_json = cfg.out_dir / "predictions.json"
+    dump_json(out_json, payload)
+    return out_json

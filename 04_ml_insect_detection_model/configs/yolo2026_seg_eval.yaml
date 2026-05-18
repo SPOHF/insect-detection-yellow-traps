@@ -1,22 +1,2 @@
-# Methodology (eval):
-# 1) Evaluate each fold model on its validation split.
-# 2) Report fold-level and mean cross-validation metrics.
-# 3) Confirm the selected best model is stable across folds.
-
-experiment_name: yolo2026_seg_eval
-evaluation_metrics:
-  - map50
-  - map50_95
-  - precision
-  - recall
-  - segmentation_iou
-
-cross_validation:
-  enabled: true
-  folds: 5
-  report_mean_and_std: true
-  primary_metric: map50_95
-
-artifacts:
-  fold_report_path: runs/eval/cv_fold_report.json
-  summary_report_path: runs/eval/cv_summary_report.json
+train_run_dir: runs/train/yolo2026_seg
+primary_metric: map50_95
