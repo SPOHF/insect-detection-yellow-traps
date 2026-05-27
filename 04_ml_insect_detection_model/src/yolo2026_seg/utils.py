@@ -1,26 +1,45 @@
-"""Methodology for utils module.
+from __future__ import annotations
 
-Purpose:
-Centralize shared helper logic so train/eval/infer behavior stays consistent
-and reproducible.
+import json
+import random
+from pathlib import Path
+from statistics import mean, pstdev
+from typing import Any
 
-What this file should implement:
-1. Reproducibility helpers:
-- Seed setup for python/numpy/torch.
-- Deterministic runtime toggles and seed logging.
+import numpy as np
+import torch
 
-2. Logging helpers:
-- Consistent console/file logging format.
-- Structured metric logging per epoch and per fold.
 
-3. Path and artifact helpers:
-- Standard directory creation and naming conventions.
-- Fold-aware paths for checkpoints, reports, and predictions.
+def set_seed(seed: int) -> None:
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
-4. Metric utilities:
-- Safe averaging/std helpers for CV summaries.
-- Utility formatters for report generation.
 
-5. Validation utilities:
-- Common assertions for config values and runtime prerequisites.
-"""
+def ensure_dir(path: Path) -> Path:
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def to_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def metric_row(name: str, vals: list[float]) -> dict[str, float | str]:
+    return {
+        "metric": name,
+        "mean": mean(vals) if vals else 0.0,
+        "std": pstdev(vals) if len(vals) > 1 else 0.0,
+        "min": min(vals) if vals else 0.0,
+        "max": max(vals) if vals else 0.0,
+    }
+
+
+def dump_json(path: Path, payload: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")

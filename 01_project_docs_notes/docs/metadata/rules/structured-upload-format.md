@@ -89,4 +89,4 @@ Every image in the batch is validated before storage or inference starts.
 
 ## Compatibility notes
 
-The canonical metadata schema in `docs/metadata/schema/metadata.schema.json` defines the broader per-image metadata target for future collection maturity. The current MVP structured upload workflow persists the subset required by ingestion, storage, graph linking, prediction, and analytics.
+The canonical metadata schema in `../schema/metadata.schema.json` defines the broader per-image metadata target for future collection maturity. The current MVP structured upload workflow persists the subset required by ingestion, storage, graph linking, prediction, and analytics.

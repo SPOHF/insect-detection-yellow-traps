@@ -37,6 +37,8 @@ class Settings(BaseSettings):
     model_metrics_path: str = Field(default='../poc-model/model_metrics.json', alias='MODEL_METRICS_PATH')
     model_confidence: float = Field(default=0.25, alias='MODEL_CONFIDENCE')
     model_image_size: int = Field(default=640, alias='MODEL_IMAGE_SIZE')
+    model_device: str = Field(default='auto', alias='MODEL_DEVICE')
+    model_mps_high_watermark_ratio: float = Field(default=0.7, alias='MODEL_MPS_HIGH_WATERMARK_RATIO')
     openai_api_key: str = Field(default='', alias='OPENAI_API_KEY')
     openai_chat_model: str = Field(default='gpt-4.1-mini', alias='OPENAI_CHAT_MODEL')
 
@@ -51,6 +53,14 @@ class Settings(BaseSettings):
     @classmethod
     def normalize_app_env(cls, value: str) -> str:
         return value.strip().lower()
+
+    @field_validator('model_device')
+    @classmethod
+    def normalize_model_device(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in {'auto', 'mps', 'cpu'}:
+            raise ValueError('MODEL_DEVICE must be one of: auto, mps, cpu')
+        return normalized
 
     @model_validator(mode='after')
     def validate_security_settings(self) -> 'Settings':

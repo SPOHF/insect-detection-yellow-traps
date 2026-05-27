@@ -1,26 +1,30 @@
-"""Methodology for eval module.
+from __future__ import annotations
 
-Purpose:
-Evaluate model quality consistently and make CV-based selection transparent.
+from pathlib import Path
+from typing import Any
 
-What this file should implement:
-1. Fold-level evaluation:
-- Load each fold's best checkpoint.
-- Evaluate on the corresponding validation split only.
+from .utils import dump_json, metric_row
 
-2. Metric consistency:
-- Use the same metric definitions across all folds.
-- Include detection and segmentation metrics.
 
-3. Aggregation:
-- Build CV summary with mean, std, min, max per metric.
-- Highlight primary selection metric (for example mAP50-95).
+def summarize_folds(fold_metrics: list[dict[str, float]], primary_metric: str) -> dict[str, Any]:
+    keys = sorted({k for fm in fold_metrics for k in fm.keys()})
+    rows = []
+    for k in keys:
+        vals = [fm.get(k, 0.0) for fm in fold_metrics]
+        rows.append(metric_row(k, vals))
 
-4. Error analysis outputs:
-- Save confusion patterns and hardest samples.
-- Store per-class performance to identify weak insect categories.
+    best_fold = max(
+        range(len(fold_metrics)),
+        key=lambda i: fold_metrics[i].get(primary_metric, 0.0),
+    ) if fold_metrics else -1
 
-5. Decision report:
-- Produce machine-readable and human-readable reports used by training
-  selection and documentation.
-"""
+    return {
+        "primary_metric": primary_metric,
+        "best_fold": best_fold + 1 if best_fold >= 0 else None,
+        "summary": rows,
+        "fold_metrics": fold_metrics,
+    }
+
+
+def save_eval_report(path: Path, payload: dict[str, Any]) -> None:
+    dump_json(path, payload)
