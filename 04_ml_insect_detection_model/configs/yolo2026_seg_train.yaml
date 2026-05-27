@@ -1,0 +1,23 @@
+# Input
+# Set to your YOLO segmentation dataset yaml.
+data_yaml: 04_ml_insect_detection_model/data/data.yaml
+
+# Process
+model_architecture: yolo26m-seg.pt
+img_size: 1024
+epochs: 100
+batch_size: 8
+learning_rate: 0.001
+project: runs/train
+experiment_name: yolo2026_seg
+
+cross_validation:
+  enabled: true
+  folds: 5
+  seed: 42
+  group_delimiter: "__"
+  selection_metric: map50_95
+
+# Output
+outputs:
+  best_model_path: 04_ml_insect_detection_model/weights/yolo2026_seg_best.pt
