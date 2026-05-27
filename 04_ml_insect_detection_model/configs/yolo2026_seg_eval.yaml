@@ -1,0 +1,2 @@
+train_run_dir: runs/train/yolo2026_seg
+primary_metric: map50_95

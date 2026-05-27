@@ -26,7 +26,7 @@ This document lists the major operational workflows in the insect identification
 ## WF-04 Metadata Lifecycle
 
 - Scope: metadata schema, input capture, validation, storage, retrieval.
-- Related docs: `upload_ingestion_flow.md`, `workflow_traceability_matrix.md`, plus metadata docs in `docs/metadata/` (other branch).
+- Related docs: `upload_ingestion_flow.md`, `workflow_traceability_matrix.md`, plus metadata docs in `../metadata/`.
 - Related issue cluster: `#21`, `#22`-`#27`, `#49`, `#58`-`#62`, `#67`-`#70`.
 
 ## WF-04A Storage Organization
