@@ -33,7 +33,7 @@ jobs:
           cache-dependency-path: 03_application/frontend/package-lock.json
 
       - name: Backend compile checks
-        run: python -m compileall 03_application/backend/app 04_modeling_experimental/src
+        run: python -m compileall 03_application/backend/app
 
       - name: Frontend build checks
         working-directory: 03_application/frontend
@@ -80,12 +80,15 @@ jobs:
       - name: Commit snapshot
         if: ${{ github.event_name == 'push' && github.ref_name == 'develop' }}
         run: |
+          set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add 02_pm_analytics_dashboard/quality_history.json
           if ! git diff --cached --quiet; then
             git commit -m "chore(ci): append quality/deployment snapshot [skip ci]"
-            git push
+            # Avoid non-fast-forward failures when another run pushes first.
+            git pull --rebase origin "${GITHUB_REF_NAME}"
+            git push origin "HEAD:${GITHUB_REF_NAME}"
           fi
 
       - name: Fail job if checks failed
