@@ -5,6 +5,7 @@ End-to-end local platform for monitoring *Drosophila suzukii* on yellow sticky t
 This repo is now kept intentionally simple:
 - `03_application/` is the product code you run.
 - `04_ml_insect_detection_model/` stores model weight files only.
+- `develop` is the active integration branch before promotion to `main`.
 
 ## Repository Layout
 
