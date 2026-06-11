@@ -10,4 +10,4 @@ router = APIRouter()
 
 @router.get("/")
 def root():
-    return RedirectResponse(url="/docs")
+    return RedirectResponse(url="https://insect-detection-yellow-traps.onrender.com/docs")
