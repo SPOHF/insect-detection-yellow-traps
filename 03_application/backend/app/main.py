@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from app.api import admin, analysis, analytics, auth, environment, fields, map
+from app.api import admin, analysis, analytics, auth, environment, fields, map, root
 from app.core.config import get_settings
 from app.core.security import hash_password
 from app.core.security_headers import add_security_headers
@@ -34,6 +34,7 @@ app.add_middleware(
 )
 
 app.include_router(auth.router)
+app.include_router(root.router)
 app.include_router(fields.router)
 app.include_router(map.router)
 app.include_router(analysis.router)
