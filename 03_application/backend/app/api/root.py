@@ -3,10 +3,11 @@ File Purpose: root health/docs endpoint
 """
 
 from fastapi import APIRouter
+from fastapi.responses import RedirectResponse
 
 router = APIRouter()
 
 
 @router.get("/")
-def root() -> dict[str, str]:
-     return RedirectResponse(url="/docs")
+def root():
+    return RedirectResponse(url="/docs")
