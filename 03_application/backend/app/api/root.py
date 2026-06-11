@@ -9,7 +9,4 @@ router = APIRouter()
 
 @router.get("/")
 def root() -> dict[str, str]:
-    return {
-        "status": "running",
-        "docs": "/docs",
-    }
+     return RedirectResponse(url="/docs")
