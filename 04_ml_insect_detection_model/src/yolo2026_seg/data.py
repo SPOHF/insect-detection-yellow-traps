@@ -9,7 +9,7 @@ from typing import Any
 import yaml
 
 # Keep image support intentionally simple.
-IMAGE_EXTS = {".jpg", ".png"}
+IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
 
 
 @dataclass(frozen=True)

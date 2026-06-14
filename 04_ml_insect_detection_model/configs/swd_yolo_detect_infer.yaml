@@ -1,0 +1,14 @@
+# Runtime-compatible detection inference config.
+model_path: 04_ml_insect_detection_model/weights/swd_yolo_best.pt
+task: detect
+inputs:
+  source_dir: data/infer/images
+
+img_size: 1024
+confidence_threshold: 0.25
+iou_threshold: 0.50
+max_detections: 300
+
+outputs:
+  save_visualizations: true
+  output_dir: runs/infer

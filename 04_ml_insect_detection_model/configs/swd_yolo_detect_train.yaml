@@ -1,15 +1,14 @@
-# Legacy segmentation experiment config.
-# The production app currently consumes bounding boxes, so prefer swd_yolo_detect_train.yaml.
+# Runtime-compatible detection training config for spotted-wing drosophila monitoring.
+# Use this for the production app because the backend consumes bounding boxes.
 
 # Input
-# Set to a YOLO segmentation dataset yaml with polygon labels.
 data_yaml: 04_ml_insect_detection_model/data/dataset_versions/combined-v001/data.yaml
-task: segment
-model_architecture: yolo26m-seg.pt
+task: detect
+model_architecture: yolo11s.pt
 
 # Process
 img_size: 1024
-epochs: 100
+epochs: 150
 batch_size: 8
 learning_rate: 0.001
 optimizer: auto
@@ -18,7 +17,7 @@ close_mosaic: 10
 single_cls: true
 patience: 100
 project: runs/train
-experiment_name: yolo2026_seg
+experiment_name: swd_yolo_detect
 
 cross_validation:
   enabled: true
@@ -29,4 +28,4 @@ cross_validation:
 
 # Output
 outputs:
-  best_model_path: 04_ml_insect_detection_model/weights/yolo2026_seg_best.pt
+  best_model_path: 04_ml_insect_detection_model/weights/swd_yolo_best.pt

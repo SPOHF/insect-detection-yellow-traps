@@ -1,0 +1,31 @@
+# Lightweight YOLOv11 baseline inspired by SPoHF-Yolo-V11.
+# Keep it as a benchmark; do not promote unless it beats swd_yolo_detect on the same labeled test set.
+
+# Input
+data_yaml: 04_ml_insect_detection_model/data/dataset_versions/combined-v001/data.yaml
+task: detect
+model_architecture: yolo11n.pt
+
+# Process
+img_size: 1024
+epochs: 250
+batch_size: 8
+learning_rate: 0.001
+optimizer: auto
+cos_lr: true
+close_mosaic: 10
+single_cls: true
+patience: 200
+project: runs/train
+experiment_name: swd_yolo11n_baseline
+
+cross_validation:
+  enabled: true
+  folds: 5
+  seed: 42
+  group_delimiter: "__"
+  selection_metric: map50_95
+
+# Output
+outputs:
+  best_model_path: 04_ml_insect_detection_model/weights/swd_yolo11n_baseline_best.pt

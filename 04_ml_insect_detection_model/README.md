@@ -1,7 +1,7 @@
 # Section 04 - ML Insect Detection Model
 
 ## Goal
-Build a reliable insect detection + segmentation pipeline and choose the best model using cross-validation.
+Build a reliable insect detection pipeline for yellow sticky traps, keep segmentation as an optional experiment, and choose the best model using cross-validation.
 
 ## Short Methodology
 1. Prepare and validate the dataset structure and labels.
@@ -13,8 +13,8 @@ Build a reliable insect detection + segmentation pipeline and choose the best mo
 7. Run final evaluation, inference checks, and export model artifacts.
 
 ## Folder Intent
-- `configs/`: experiment settings for train, eval, infer.
+- `configs/`: experiment settings for production detection, YOLOv11 baselines, legacy segmentation, eval, and infer.
 - `src/`: modular code for data, model, training, evaluation, inference, and export.
 - `tests/`: checks for data loading, training/eval behavior, config validation.
 - `weights/`: pretrained and trained model checkpoints.
-- `model_docs/`: notes on model decisions and experiment conclusions.
+- `model_docs/`: notes on model decisions, dataset versioning, experiment conclusions, and promotion rules.

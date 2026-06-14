@@ -10,7 +10,7 @@ from yolo2026_seg.eval import save_eval_report
 from yolo2026_seg.infer import run_inference
 from yolo2026_seg.train import run_training
 
-app = typer.Typer(add_completion=False, help="YOLO2026 insect segmentation CLI")
+app = typer.Typer(add_completion=False, help="YOLO insect detection and segmentation CLI")
 
 
 @app.command("train")
