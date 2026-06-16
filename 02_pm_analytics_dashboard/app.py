@@ -1398,6 +1398,64 @@ def coverage_trend_chart(history: list[dict]) -> go.Figure:
     return fig
 
 
+def quality_pass_rate_trend_chart(history: list[dict]) -> go.Figure:
+    title = "Weekly Test Pass Rate"
+    if not history:
+        fig = go.Figure()
+        fig.update_layout(title=title)
+        return fig
+    rows = []
+    for item in history:
+        ts = pd.to_datetime(item.get("timestamp"), utc=True, errors="coerce")
+        if pd.isna(ts):
+            continue
+        rows.append(
+            {
+                "timestamp": ts,
+                "pass_rate_pct": float(item.get("runtime_tests_pass_rate_pct", 0.0)),
+            }
+        )
+    df = pd.DataFrame(rows)
+    if df.empty:
+        fig = go.Figure()
+        fig.update_layout(title=title)
+        return fig
+    df["week"] = df["timestamp"].dt.tz_convert("UTC").dt.to_period("W").dt.start_time
+    df = df.sort_values("timestamp").groupby("week", as_index=False).last()
+    fig = px.line(df, x="week", y="pass_rate_pct", markers=True, title=title)
+    fig.update_yaxes(range=[0, 105], title="Pass rate (%)")
+    return fig
+
+
+def coverage_component_trend_chart(history: list[dict]) -> go.Figure:
+    title = "Backend vs Frontend Coverage"
+    if not history:
+        fig = go.Figure()
+        fig.update_layout(title=title)
+        return fig
+    rows = []
+    for item in history:
+        ts = pd.to_datetime(item.get("timestamp"), utc=True, errors="coerce")
+        if pd.isna(ts):
+            continue
+        rows.extend(
+            [
+                {"timestamp": ts, "component": "Backend", "coverage_pct": float(item.get("backend_coverage_pct", 0.0))},
+                {"timestamp": ts, "component": "Frontend", "coverage_pct": float(item.get("frontend_coverage_pct", 0.0))},
+            ]
+        )
+    df = pd.DataFrame(rows)
+    if df.empty:
+        fig = go.Figure()
+        fig.update_layout(title=title)
+        return fig
+    df["week"] = df["timestamp"].dt.tz_convert("UTC").dt.to_period("W").dt.start_time
+    df = df.sort_values("timestamp").groupby(["week", "component"], as_index=False).last()
+    fig = px.line(df, x="week", y="coverage_pct", color="component", markers=True, title=title)
+    fig.update_yaxes(range=[0, 100], title="Coverage (%)")
+    return fig
+
+
 def deployment_placeholder_chart(title: str) -> go.Figure:
     fig = go.Figure()
     fig.update_layout(title=title)
@@ -2077,8 +2135,6 @@ if issues_df.empty and prs_df.empty:
     dev_tab,
     quality_tab,
     cicd_tab,
-    defects_tab,
-    perf_tab,
     collab_tab,
 ) = st.tabs(
     [
@@ -2087,8 +2143,6 @@ if issues_df.empty and prs_df.empty:
         "Development (Engineering Productivity)",
         "Quality",
         "CI/CD & Deployment",
-        "Issues & Defects",
-        "System Performance",
         "Collaboration",
     ]
 )
@@ -2354,6 +2408,17 @@ with quality_tab:
             coverage_trend_chart(history),
             key="quality_coverage_trend",
         )
+    g3, g4 = st.columns(2)
+    with g3:
+        render_chart(
+            quality_pass_rate_trend_chart(history),
+            key="quality_pass_rate_trend",
+        )
+    with g4:
+        render_chart(
+            coverage_component_trend_chart(history),
+            key="quality_component_coverage",
+        )
 
 with dev_tab:
     st.markdown("### Development (Engineering Productivity)")
@@ -2467,71 +2532,6 @@ with cicd_tab:
         else:
             st.info("No deployment history available.")
     st.caption(f"Demo rollback events in selected range: {rollback_count}")
-
-with defects_tab:
-    st.markdown("### Issues & Defects")
-    st.caption("Bug intake, closure speed, reopen behavior, and severity profile.")
-    scoped_issues = filtered_issues.copy() if "filtered_issues" in locals() else issues_df.copy()
-    defects = scoped_issues[
-        scoped_issues["labels"].apply(
-            lambda labels: isinstance(labels, list)
-            and any("bug" in str(label).strip().lower() for label in labels)
-        )
-    ].copy() if not scoped_issues.empty else pd.DataFrame()
-    open_bugs = int((defects["state"].str.lower() == "open").sum()) if not defects.empty else 0
-    closed_bugs = int((defects["state"].str.lower() == "closed").sum()) if not defects.empty else 0
-    bug_rate = (len(defects) / max(len(scoped_issues), 1) * 100.0) if not defects.empty else 0.0
-    bug_ttr_days = (
-        float(
-            _delta_days(
-                defects.dropna(subset=["created_at", "closed_at"])["closed_at"],
-                defects.dropna(subset=["created_at", "closed_at"])["created_at"],
-            ).median()
-        )
-        if not defects.empty
-        else float("nan")
-    )
-
-    reopen_rate = float("nan")
-    if not defects.empty and not issue_events_df.empty:
-        defect_numbers = set(defects["number"].dropna().astype(int).tolist())
-        reopened = issue_events_df[
-            issue_events_df["issue_number"].isin(defect_numbers)
-            & (issue_events_df["event"].fillna("").str.lower() == "reopened")
-        ]
-        reopen_rate = (reopened["issue_number"].nunique() / max(len(defect_numbers), 1)) * 100.0
-
-    b1, b2, b3, b4, b5 = st.columns(5)
-    b1.metric("Bug Rate", f"{bug_rate:.1f}%")
-    b2.metric("Open Bugs", open_bugs)
-    b3.metric("Closed Bugs", closed_bugs)
-    b4.metric("Median Time to Resolution", fmt_days(bug_ttr_days))
-    b5.metric("Reopen Rate", fmt_pct(reopen_rate))
-
-    bl, br = st.columns(2)
-    with bl:
-        render_chart(bug_status_pie(scoped_issues), key="defects_status_pie")
-    with br:
-        render_chart(bug_open_close_trend(scoped_issues), key="defects_trend")
-    bl2, br2 = st.columns(2)
-    with bl2:
-        render_chart(bug_severity_distribution_chart(defects), key="defects_severity_dist", brand_style=False)
-    with br2:
-        render_chart(issue_state_pie(defects), key="defects_state_split", brand_style=False)
-
-with perf_tab:
-    st.markdown("### System Performance")
-    st.caption("Operational telemetry placeholders. Connect runtime metrics to populate these views.")
-    p1, p2, p3, p4 = st.columns(4)
-    p1.metric("API P95 Latency", "N/A")
-    p2.metric("Inference P95 Latency", "N/A")
-    p3.metric("Error Rate", "N/A")
-    p4.metric("Throughput (req/min)", "N/A")
-    pl, pr = st.columns(2)
-    with pl:
-        render_chart(deployment_placeholder_chart("API Latency Trend"), key="perf_api_latency")
-    with pr:
-        render_chart(deployment_placeholder_chart("Inference Latency Trend"), key="perf_inference_latency")
 
 with collab_tab:
     st.markdown("### Collaboration")
