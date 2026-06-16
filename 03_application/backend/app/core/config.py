@@ -43,6 +43,9 @@ class Settings(BaseSettings):
     openai_chat_model: str = Field(default='gpt-4.1-mini', alias='OPENAI_CHAT_MODEL')
 
     upload_dir: str = Field(default='storage/uploads', alias='UPLOAD_DIR')
+    upload_storage_backend: str = Field(default='local', alias='UPLOAD_STORAGE_BACKEND')
+    azure_storage_connection_string: str = Field(default='', alias='AZURE_STORAGE_CONNECTION_STRING')
+    azure_storage_container: str = Field(default='uploads', alias='AZURE_STORAGE_CONTAINER')
     cors_origins_raw: str = Field(default='http://localhost:5173', alias='CORS_ORIGINS')
 
     admin_email: str = Field(default='admin@local.test', alias='ADMIN_EMAIL')
@@ -60,6 +63,14 @@ class Settings(BaseSettings):
         normalized = value.strip().lower()
         if normalized not in {'auto', 'mps', 'cpu'}:
             raise ValueError('MODEL_DEVICE must be one of: auto, mps, cpu')
+        return normalized
+
+    @field_validator('upload_storage_backend')
+    @classmethod
+    def normalize_upload_storage_backend(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in {'local', 'azure'}:
+            raise ValueError('UPLOAD_STORAGE_BACKEND must be one of: local, azure')
         return normalized
 
     @model_validator(mode='after')
