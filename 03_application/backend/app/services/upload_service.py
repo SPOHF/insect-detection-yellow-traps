@@ -11,10 +11,15 @@ from __future__ import annotations
 from datetime import date, timedelta
 from pathlib import Path
 import re
+import tempfile
 from typing import List, Sequence
 from uuid import uuid4
 
+from azure.core.exceptions import ResourceExistsError
+from azure.storage.blob import BlobServiceClient
 from fastapi import UploadFile
+
+from app.core.config import get_settings
 
 ALLOWED_IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.webp'}
 MAX_UPLOAD_SIZE_MB = 20
@@ -138,6 +143,77 @@ def build_upload_storage_path(upload_root: Path, field_id: str, trap_code: str, 
     )
 
 
+def build_upload_blob_name(field_id: str, trap_code: str, capture_date: date, filename: str) -> str:
+    path = Path(
+        secure_storage_segment(field_id, 'field-unknown'),
+        f'{capture_date:%Y}',
+        f'{capture_date:%m}',
+        f'{capture_date:%d}',
+        secure_storage_segment(trap_code, 'trap-unknown'),
+        secure_filename(filename),
+    )
+    return path.as_posix()
+
+
+def _get_blob_service_client(connection_string: str) -> BlobServiceClient:
+    return BlobServiceClient.from_connection_string(connection_string)
+
+
+def _ensure_azure_container_exists(service_client: BlobServiceClient, container: str) -> None:
+    try:
+        service_client.create_container(container)
+    except ResourceExistsError:
+        pass
+
+
+def _upload_file_to_azure_blob(temp_path: Path, connection_string: str, container: str, blob_name: str) -> str:
+    service_client = _get_blob_service_client(connection_string)
+    _ensure_azure_container_exists(service_client, container)
+    blob_client = service_client.get_blob_client(container=container, blob=blob_name)
+    with temp_path.open('rb') as data:
+        blob_client.upload_blob(data, overwrite=True)
+    return f'azure://{container}/{blob_name}'
+
+
+def _write_upload_file_to_local_temp(upload: UploadFile) -> Path:
+    suffix = Path(upload.filename or 'upload.jpg').suffix
+    temp_path = Path(tempfile.NamedTemporaryFile(delete=False, suffix=suffix).name)
+    try:
+        upload.file.seek(0)
+    except (AttributeError, OSError):
+        pass
+    with temp_path.open('wb') as out_file:
+        while True:
+            chunk = upload.file.read(1024 * 1024)
+            if not chunk:
+                break
+            out_file.write(chunk)
+    return temp_path
+
+
+def is_azure_storage_reference(image_path: str) -> bool:
+    return image_path.startswith('azure://')
+
+
+def parse_azure_storage_reference(image_path: str) -> tuple[str, str]:
+    if not is_azure_storage_reference(image_path):
+        raise ValueError('Invalid azure storage reference')
+    parts = image_path[len('azure://'):].split('/', 1)
+    if len(parts) != 2 or not parts[0] or not parts[1]:
+        raise ValueError('Invalid azure storage reference')
+    return parts[0], parts[1]
+
+
+def download_blob_to_temp_file(connection_string: str, container: str, blob_name: str) -> Path:
+    service_client = _get_blob_service_client(connection_string)
+    blob_client = service_client.get_blob_client(container=container, blob=blob_name)
+    temp_path = Path(tempfile.NamedTemporaryFile(delete=False, suffix=Path(blob_name).suffix).name)
+    downloader = blob_client.download_blob()
+    with temp_path.open('wb') as out_file:
+        out_file.write(downloader.readall())
+    return temp_path
+
+
 def save_upload_file(
     upload_root: Path,
     upload: UploadFile,
@@ -145,7 +221,28 @@ def save_upload_file(
     field_id: str | None = None,
     trap_code: str | None = None,
     capture_date: date | None = None,
-) -> Path:
+) -> tuple[Path, str, Path | None]:
+    settings = get_settings()
+    use_azure = settings.upload_storage_backend == 'azure'
+
+    if use_azure:
+        if not settings.azure_storage_connection_string:
+            raise ValueError('Azure storage backend is enabled but AZURE_STORAGE_CONNECTION_STRING is not configured')
+        if not settings.azure_storage_container:
+            raise ValueError('Azure storage backend is enabled but AZURE_STORAGE_CONTAINER is not configured')
+        if not (field_id and trap_code and capture_date):
+            raise ValueError('Azure storage backend requires field_id, trap_code, and capture_date')
+
+        temp_path = _write_upload_file_to_local_temp(upload)
+        blob_name = build_upload_blob_name(field_id, trap_code, capture_date, upload.filename or temp_path.name)
+        storage_ref = _upload_file_to_azure_blob(
+            temp_path,
+            settings.azure_storage_connection_string,
+            settings.azure_storage_container,
+            blob_name,
+        )
+        return temp_path, storage_ref, temp_path
+
     root = upload_root.resolve()
     destination_dir = (
         build_upload_storage_path(root, field_id, trap_code, capture_date)
@@ -174,4 +271,4 @@ def save_upload_file(
     except Exception:
         destination.unlink(missing_ok=True)
         raise
-    return destination
+    return destination, str(destination), None

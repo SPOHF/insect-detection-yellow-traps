@@ -17,6 +17,7 @@ import logging
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
+from starlette.background import BackgroundTask
 from sqlalchemy import and_, extract, func
 from sqlalchemy.orm import Session
 import requests
@@ -38,6 +39,9 @@ from app.services.upload_service import (
     validate_identifier,
     validate_trap_code,
     validate_upload_file,
+    is_azure_storage_reference,
+    parse_azure_storage_reference,
+    download_blob_to_temp_file,
 )
 from app.services.upload_visibility import apply_production_upload_filter
 
@@ -115,20 +119,24 @@ def upload_range(
 
     graph = GraphService()
     saved_paths: list[Path] = []
+    cleanup_paths: list[Path] = []
     processed_uploads: list[tuple[TrapUpload, UploadFile, list[dict]]] = []
     committed = False
     results: list[UploadResult] = []
     try:
         for idx, file in enumerate(images):
             try:
-                saved_path = save_upload_file(
+                saved_path, storage_ref, cleanup_path = save_upload_file(
                     upload_root,
                     file,
                     field_id=resolved_field_id,
                     trap_code=resolved_trap_code,
                     capture_date=resolved_capture_dates[idx],
                 )
-                saved_paths.append(saved_path)
+                if cleanup_path is not None:
+                    cleanup_paths.append(cleanup_path)
+                else:
+                    saved_paths.append(saved_path)
                 detections = infer.run(saved_path)
             except ValueError as exc:
                 logger.warning('Upload validation failed for user=%s file=%s: %s', current_user.id, file.filename, exc)
@@ -142,7 +150,7 @@ def upload_range(
                 trap_id=trap_id,
                 trap_code=resolved_trap_code,
                 capture_date=resolved_capture_dates[idx],
-                image_path=str(saved_path),
+                image_path=storage_ref,
                 detection_count=len(detections),
                 confidence_avg=float(confidence_avg),
             )
@@ -196,11 +204,15 @@ def upload_range(
         if not committed:
             for path in saved_paths:
                 path.unlink(missing_ok=True)
+            for path in cleanup_paths:
+                path.unlink(missing_ok=True)
         raise
     except Exception as exc:
         db.rollback()
         if not committed:
             for path in saved_paths:
+                path.unlink(missing_ok=True)
+            for path in cleanup_paths:
                 path.unlink(missing_ok=True)
         logger.exception(
             'Upload ingestion failed user=%s field=%s trap=%s file_count=%s',
@@ -212,6 +224,8 @@ def upload_range(
         raise HTTPException(status_code=500, detail='Upload processing failed due to internal error') from exc
     finally:
         graph.close()
+        for path in cleanup_paths:
+            path.unlink(missing_ok=True)
 
     # Auto-backfill environmental data from oldest upload date for this field.
     try:
@@ -294,6 +308,19 @@ def get_upload_image(
         raise HTTPException(status_code=404, detail='Upload not found')
 
     settings = get_settings()
+    if is_azure_storage_reference(upload.image_path):
+        if not settings.azure_storage_connection_string:
+            raise HTTPException(status_code=500, detail='Azure storage is not configured')
+        container, blob_name = parse_azure_storage_reference(upload.image_path)
+        temp_path = download_blob_to_temp_file(settings.azure_storage_connection_string, container, blob_name)
+        media_type = mimetypes.guess_type(temp_path.name)[0] or 'application/octet-stream'
+        return FileResponse(
+            path=temp_path,
+            media_type=media_type,
+            filename=Path(blob_name).name,
+            background=BackgroundTask(temp_path.unlink, missing_ok=True),
+        )
+
     upload_root = Path(settings.upload_dir).expanduser().resolve()
     stored_path = Path(upload.image_path).expanduser()
     resolved_path = (stored_path if stored_path.is_absolute() else (Path.cwd() / stored_path)).resolve()
