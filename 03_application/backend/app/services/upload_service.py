@@ -215,7 +215,7 @@ def download_blob_to_temp_file(connection_string: str, container: str, blob_name
 
 
 def save_upload_file(
-    upload_root: Path,
+    upload_root: Path | None,
     upload: UploadFile,
     *,
     field_id: str | None = None,
@@ -242,6 +242,9 @@ def save_upload_file(
             blob_name,
         )
         return temp_path, storage_ref, temp_path
+
+    if upload_root is None:
+        raise ValueError('Local upload storage requires UPLOAD_DIR to be configured')
 
     root = upload_root.resolve()
     destination_dir = (

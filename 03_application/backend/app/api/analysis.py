@@ -89,7 +89,7 @@ def upload_range(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     settings = get_settings()
-    upload_root = Path(settings.upload_dir)
+    upload_root = Path(settings.upload_dir) if settings.upload_storage_backend == 'local' else None
     infer = InferenceService()
 
     if trap_id:
@@ -320,6 +320,11 @@ def get_upload_image(
             filename=Path(blob_name).name,
             background=BackgroundTask(temp_path.unlink, missing_ok=True),
         )
+
+    if settings.upload_storage_backend != 'local':
+        raise HTTPException(status_code=404, detail='Upload image not found on local storage')
+    if settings.upload_dir is None:
+        raise HTTPException(status_code=500, detail='Local upload directory is not configured')
 
     upload_root = Path(settings.upload_dir).expanduser().resolve()
     stored_path = Path(upload.image_path).expanduser()
