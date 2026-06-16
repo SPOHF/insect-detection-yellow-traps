@@ -42,7 +42,7 @@ class Settings(BaseSettings):
     openai_api_key: str = Field(default='', alias='OPENAI_API_KEY')
     openai_chat_model: str = Field(default='gpt-4.1-mini', alias='OPENAI_CHAT_MODEL')
 
-    upload_dir: str = Field(default='storage/uploads', alias='UPLOAD_DIR')
+    upload_dir: str | None = Field(default=None, alias='UPLOAD_DIR')
     upload_storage_backend: str = Field(default='local', alias='UPLOAD_STORAGE_BACKEND')
     azure_storage_connection_string: str = Field(default='', alias='AZURE_STORAGE_CONNECTION_STRING')
     azure_storage_container: str = Field(default='uploads', alias='AZURE_STORAGE_CONTAINER')
