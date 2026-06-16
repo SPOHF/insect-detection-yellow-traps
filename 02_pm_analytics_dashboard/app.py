@@ -1273,6 +1273,10 @@ def load_quality_history() -> list[dict]:
         with open(QUALITY_HISTORY_PATH, "r", encoding="utf-8") as f:
             data = json.load(f)
         if isinstance(data, list):
+            if not _get_config_bool("ENABLE_LIVE_QUALITY_HISTORY", False):
+                demo_data = [item for item in data if item.get("source") == "demo-quality-history"]
+                if demo_data:
+                    return demo_data
             return data
         return []
     except Exception:
