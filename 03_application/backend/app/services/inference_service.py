@@ -30,7 +30,7 @@ class InferenceService:
         self._configure_mps_limits()
 
     def _resolve_device(self) -> str:
-        configured = self.settings.model_device
+        configured = getattr(self.settings, 'model_device', 'auto')
         mps_available = hasattr(torch.backends, 'mps') and torch.backends.mps.is_available()
         if configured == 'auto':
             return 'mps' if mps_available else 'cpu'
@@ -42,7 +42,9 @@ class InferenceService:
     def _configure_mps_limits(self) -> None:
         if self._device != 'mps':
             return
-        os.environ['PYTORCH_MPS_HIGH_WATERMARK_RATIO'] = str(self.settings.model_mps_high_watermark_ratio)
+        os.environ['PYTORCH_MPS_HIGH_WATERMARK_RATIO'] = str(
+            getattr(self.settings, 'model_mps_high_watermark_ratio', 0.7)
+        )
 
     def _get_model(self) -> YOLO:
         if self._model is None:
