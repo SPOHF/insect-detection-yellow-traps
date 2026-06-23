@@ -64,6 +64,10 @@ def _upload(filename: str, content: bytes | None = None) -> UploadFile:
     return UploadFile(filename=filename, file=BytesIO(content))
 
 
+def _local_settings(upload_dir: Path) -> SimpleNamespace:
+    return SimpleNamespace(upload_dir=str(upload_dir), upload_storage_backend="local")
+
+
 def test_upload_range_runs_ingestion_end_to_end(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -93,7 +97,7 @@ def test_upload_range_runs_ingestion_end_to_end(
     def fake_sync_environment(db: Session, field_map: FieldMap, start: date, end: date) -> None:
         env_calls.append((field_map.id, start, end))
 
-    monkeypatch.setattr(analysis_api, "get_settings", lambda: SimpleNamespace(upload_dir=str(upload_dir)))
+    monkeypatch.setattr(analysis_api, "get_settings", lambda: _local_settings(upload_dir))
     monkeypatch.setattr(analysis_api, "InferenceService", FakeInferenceService)
     monkeypatch.setattr(analysis_api, "GraphService", FakeGraphService)
     monkeypatch.setattr(analysis_api, "infer_sync_start_date", lambda db, field_id: date(2026, 1, 1))
@@ -168,7 +172,7 @@ def test_upload_range_persists_structured_exact_trap_metadata(
         def close(self) -> None:
             return None
 
-    monkeypatch.setattr(analysis_api, "get_settings", lambda: SimpleNamespace(upload_dir=str(upload_dir)))
+    monkeypatch.setattr(analysis_api, "get_settings", lambda: _local_settings(upload_dir))
     monkeypatch.setattr(analysis_api, "InferenceService", FakeInferenceService)
     monkeypatch.setattr(analysis_api, "GraphService", FakeGraphService)
     monkeypatch.setattr(analysis_api, "infer_sync_start_date", lambda db, field_id: None)
@@ -269,7 +273,7 @@ def test_get_upload_prediction_result_returns_image_metadata_and_detections(
         def close(self) -> None:
             return None
 
-    monkeypatch.setattr(analysis_api, "get_settings", lambda: SimpleNamespace(upload_dir=str(upload_dir)))
+    monkeypatch.setattr(analysis_api, "get_settings", lambda: _local_settings(upload_dir))
     monkeypatch.setattr(analysis_api, "InferenceService", FakeInferenceService)
     monkeypatch.setattr(analysis_api, "GraphService", FakeGraphService)
     monkeypatch.setattr(analysis_api, "infer_sync_start_date", lambda db, field_id: None)
@@ -358,7 +362,7 @@ def test_get_upload_image_returns_file_response_for_owner(
     db_session.add(upload)
     db_session.commit()
 
-    monkeypatch.setattr(analysis_api, "get_settings", lambda: SimpleNamespace(upload_dir=str(upload_dir)))
+    monkeypatch.setattr(analysis_api, "get_settings", lambda: _local_settings(upload_dir))
     response = analysis_api.get_upload_image(upload.id, db=db_session, current_user=user)
 
     assert response.status_code == 200
@@ -390,7 +394,7 @@ def test_get_upload_image_rejects_paths_outside_configured_upload_root(
     db_session.add(upload)
     db_session.commit()
 
-    monkeypatch.setattr(analysis_api, "get_settings", lambda: SimpleNamespace(upload_dir=str(upload_dir)))
+    monkeypatch.setattr(analysis_api, "get_settings", lambda: _local_settings(upload_dir))
     with pytest.raises(HTTPException) as exc:
         analysis_api.get_upload_image(upload.id, db=db_session, current_user=user)
 
@@ -417,7 +421,7 @@ def test_upload_range_rejects_invalid_batch_before_storage(
         def close(self) -> None:
             return None
 
-    monkeypatch.setattr(analysis_api, "get_settings", lambda: SimpleNamespace(upload_dir=str(upload_dir)))
+    monkeypatch.setattr(analysis_api, "get_settings", lambda: _local_settings(upload_dir))
     monkeypatch.setattr(analysis_api, "InferenceService", UnexpectedInferenceService)
     monkeypatch.setattr(analysis_api, "GraphService", FakeGraphService)
 
@@ -451,7 +455,7 @@ def test_upload_range_rejects_oversized_batch_before_processing(
         def run(self, image_path: Path):  # noqa: ANN201
             raise AssertionError("inference should not run for oversized batches")
 
-    monkeypatch.setattr(analysis_api, "get_settings", lambda: SimpleNamespace(upload_dir=str(tmp_path / "uploads")))
+    monkeypatch.setattr(analysis_api, "get_settings", lambda: _local_settings(tmp_path / "uploads"))
     monkeypatch.setattr(analysis_api, "InferenceService", UnexpectedInferenceService)
 
     with pytest.raises(HTTPException) as exc:
@@ -495,7 +499,7 @@ def test_upload_range_rolls_back_sql_when_batch_processing_fails(
         def close(self) -> None:
             return None
 
-    monkeypatch.setattr(analysis_api, "get_settings", lambda: SimpleNamespace(upload_dir=str(upload_dir)))
+    monkeypatch.setattr(analysis_api, "get_settings", lambda: _local_settings(upload_dir))
     monkeypatch.setattr(analysis_api, "InferenceService", FailingInferenceService)
     monkeypatch.setattr(analysis_api, "GraphService", FakeGraphService)
 
@@ -538,7 +542,7 @@ def test_upload_range_uses_explicit_capture_dates_for_per_image_metadata(
         def close(self) -> None:
             return None
 
-    monkeypatch.setattr(analysis_api, "get_settings", lambda: SimpleNamespace(upload_dir=str(upload_dir)))
+    monkeypatch.setattr(analysis_api, "get_settings", lambda: _local_settings(upload_dir))
     monkeypatch.setattr(analysis_api, "InferenceService", FakeInferenceService)
     monkeypatch.setattr(analysis_api, "GraphService", FakeGraphService)
     monkeypatch.setattr(analysis_api, "infer_sync_start_date", lambda db, field_id: None)
@@ -577,7 +581,7 @@ def test_upload_range_rejects_inconsistent_per_image_capture_dates(
         def run(self, image_path: Path):  # noqa: ANN201
             raise AssertionError("inference should not run for inconsistent per-image metadata")
 
-    monkeypatch.setattr(analysis_api, "get_settings", lambda: SimpleNamespace(upload_dir=str(tmp_path / "uploads")))
+    monkeypatch.setattr(analysis_api, "get_settings", lambda: _local_settings(tmp_path / "uploads"))
     monkeypatch.setattr(analysis_api, "InferenceService", UnexpectedInferenceService)
 
     with pytest.raises(HTTPException) as exc:
@@ -626,7 +630,7 @@ def test_upload_range_rejects_inconsistent_trap_metadata(
         def close(self) -> None:
             return None
 
-    monkeypatch.setattr(analysis_api, "get_settings", lambda: SimpleNamespace(upload_dir=str(tmp_path / "uploads")))
+    monkeypatch.setattr(analysis_api, "get_settings", lambda: _local_settings(tmp_path / "uploads"))
     monkeypatch.setattr(analysis_api, "InferenceService", UnexpectedInferenceService)
     monkeypatch.setattr(analysis_api, "GraphService", FakeGraphService)
 

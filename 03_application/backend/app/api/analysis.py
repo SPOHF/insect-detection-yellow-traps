@@ -88,8 +88,6 @@ def upload_range(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    settings = get_settings()
-    upload_root = Path(settings.upload_dir) if settings.upload_storage_backend == 'local' else None
     infer = InferenceService()
 
     if trap_id:
@@ -109,6 +107,9 @@ def upload_range(
         field = require_field_access(db, field_id, current_user)
         resolved_field_id = field.id
         resolved_trap_code = trap_code or 'UNSPECIFIED'
+
+    settings = get_settings()
+    upload_root = Path(settings.upload_dir) if settings.upload_storage_backend == 'local' else None
 
     for file in images:
         try:

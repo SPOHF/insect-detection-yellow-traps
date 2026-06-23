@@ -48,16 +48,18 @@ def test_allocate_capture_dates_spreads_evenly() -> None:
 def test_save_upload_file_persists_content(tmp_path: Path) -> None:
     content = b"abc123"
     upload = SimpleNamespace(filename="trap.jpg", file=BytesIO(content))
-    saved = save_upload_file(tmp_path, upload)
+    saved, storage_ref, cleanup_path = save_upload_file(tmp_path, upload)
     assert saved.exists()
     assert saved.read_bytes() == content
     assert saved.name.endswith("_trap.jpg")
+    assert storage_ref == str(saved)
+    assert cleanup_path is None
 
 
 def test_save_upload_file_uses_hierarchical_storage_context(tmp_path: Path) -> None:
     content = b"abc123"
     upload = SimpleNamespace(filename="../Trap Image 01.JPG", file=BytesIO(content))
-    saved = save_upload_file(
+    saved, storage_ref, cleanup_path = save_upload_file(
         tmp_path,
         upload,
         field_id="field-1",
@@ -69,6 +71,8 @@ def test_save_upload_file_uses_hierarchical_storage_context(tmp_path: Path) -> N
     assert saved.read_bytes() == content
     assert saved.parent == tmp_path / "field-1" / "2026" / "05" / "04" / "North-Edge"
     assert saved.name.endswith("_TrapImage01.JPG")
+    assert storage_ref == str(saved)
+    assert cleanup_path is None
     assert build_upload_storage_path(tmp_path, "field-1", "North Edge", date(2026, 5, 4)).samefile(saved.parent)
 
 
