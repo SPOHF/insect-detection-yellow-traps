@@ -22,6 +22,7 @@ from app.api import analytics as analytics_api
 from app.api import environment as environment_api
 from app.db.base import Base
 from app.models import Detection, FieldMap, TrapUpload, User
+from app.services import inference_service as inference_service_module
 from app.services.inference_service import InferenceService
 
 
@@ -995,3 +996,74 @@ def test_inference_service_get_model_and_run(tmp_path: Path, monkeypatch: pytest
     assert out[0]["class_id"] == 2
     assert out[0]["confidence"] == 0.91
     assert out[0]["bbox_xyxy"] == [1.0, 2.0, 3.0, 4.0]
+
+
+def test_inference_service_validates_image_path_and_type(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "app.services.inference_service.get_settings",
+        lambda: SimpleNamespace(model_weights_path=str(tmp_path / "model.pt"), model_device="cpu"),
+    )
+    svc = InferenceService()
+
+    with pytest.raises(ValueError, match="Image not found"):
+        svc.run(tmp_path / "missing.jpg")
+
+    text_file = tmp_path / "capture.txt"
+    text_file.write_text("not an image")
+    with pytest.raises(ValueError, match="Unsupported inference image type"):
+        svc.run(text_file)
+
+
+def test_inference_service_reports_missing_weights(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    image = tmp_path / "image.jpg"
+    image.write_bytes(b"fake-image")
+
+    monkeypatch.setattr(
+        "app.services.inference_service.get_settings",
+        lambda: SimpleNamespace(
+            model_weights_path=str(tmp_path / "missing.pt"),
+            model_image_size=640,
+            model_confidence=0.25,
+            model_device="cpu",
+        ),
+    )
+
+    with pytest.raises(FileNotFoundError, match="Model weights not found"):
+        InferenceService().run(image)
+
+
+def test_inference_service_wraps_prediction_failure_on_cpu(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    weights = tmp_path / "model.pt"
+    weights.write_text("mock")
+    image = tmp_path / "image.jpg"
+    image.write_bytes(b"fake-image")
+
+    class FailingModel:
+        def predict(self, **kwargs):  # noqa: ANN003
+            raise RuntimeError("model failed")
+
+    monkeypatch.setattr(
+        "app.services.inference_service.get_settings",
+        lambda: SimpleNamespace(
+            model_weights_path=str(weights),
+            model_image_size=640,
+            model_confidence=0.25,
+            model_device="cpu",
+        ),
+    )
+    monkeypatch.setattr("app.services.inference_service.YOLO", lambda path: FailingModel())
+
+    with pytest.raises(RuntimeError, match="Inference prediction failed"):
+        InferenceService().run(image)
+
+
+def test_inference_service_falls_back_to_cpu_when_mps_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "app.services.inference_service.get_settings",
+        lambda: SimpleNamespace(model_weights_path="unused.pt", model_device="mps"),
+    )
+    monkeypatch.setattr(inference_service_module.torch.backends.mps, "is_available", lambda: False)
+
+    svc = InferenceService()
+
+    assert svc._device == "cpu"

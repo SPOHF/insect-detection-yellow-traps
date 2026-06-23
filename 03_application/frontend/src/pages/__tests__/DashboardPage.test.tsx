@@ -251,6 +251,28 @@ describe('DashboardPage', () => {
     expect(window.open).toHaveBeenCalledWith('blob:insights', '_blank', 'noopener,noreferrer');
   });
 
+  it('reports blocked popups, image failures, detail failures, and export failures', async () => {
+    render(<DashboardPage />);
+    fireEvent.click(screen.getByRole('button', { name: /Monitoring Analytics/i }));
+    await waitFor(() => expect(screen.getByText('Insight Dashboard')).toBeInTheDocument());
+
+    vi.mocked(window.open).mockReturnValueOnce(null);
+    fireEvent.click(screen.getByRole('button', { name: 'View Image' }));
+    await waitFor(() => expect(screen.getByText('Popup blocked while opening image. Allow popups and try again.')).toBeInTheDocument());
+
+    getBlobMock.mockRejectedValueOnce(new Error('Image unavailable'));
+    fireEvent.click(screen.getByRole('button', { name: 'View Image' }));
+    await waitFor(() => expect(screen.getByText('Image unavailable')).toBeInTheDocument());
+
+    getMock.mockRejectedValueOnce(new Error('Detail unavailable'));
+    fireEvent.click(screen.getByRole('button', { name: 'Details' }));
+    await waitFor(() => expect(screen.getByText('Detail unavailable')).toBeInTheDocument());
+
+    getTextMock.mockRejectedValueOnce(new Error('Export unavailable'));
+    fireEvent.click(screen.getByRole('button', { name: 'Export CSV' }));
+    await waitFor(() => expect(screen.getByText('Export unavailable')).toBeInTheDocument());
+  });
+
   it('handles upload trap selection and exploratory chat flow', async () => {
     render(<DashboardPage />);
 
@@ -318,6 +340,8 @@ describe('DashboardPage', () => {
         'token-1'
       )
     );
+
+    fireEvent.change(screen.getByRole('slider'), { target: { value: '0' } });
   });
 
   it('renders insight dashboard filters, inspection, and export', async () => {
@@ -439,7 +463,10 @@ describe('DashboardPage', () => {
     fireEvent.click(screen.getByRole('button', { name: /Exploratory Analysis/i }));
     await waitFor(() => expect(screen.getByText('Data Chatbot')).toBeInTheDocument());
 
-    fireEvent.change(screen.getAllByRole('combobox')[0], { target: { value: '' } });
+    const chatSelects = screen.getAllByRole('combobox');
+    fireEvent.change(chatSelects[1], { target: { value: '2026' } });
+    fireEvent.change(chatSelects[2], { target: { value: '26' } });
+    fireEvent.change(chatSelects[0], { target: { value: '' } });
     fireEvent.change(screen.getByLabelText('Ask a question'), { target: { value: 'status?' } });
     fireEvent.click(screen.getByRole('button', { name: 'Ask Chatbot' }));
     await waitFor(() => expect(screen.getByText('Select a field first for exploratory analysis.')).toBeInTheDocument());
@@ -448,5 +475,120 @@ describe('DashboardPage', () => {
     fireEvent.change(screen.getByLabelText('Ask a question'), { target: { value: 'status now?' } });
     fireEvent.click(screen.getByRole('button', { name: 'Ask Chatbot' }));
     await waitFor(() => expect(screen.getByText('Chat failed')).toBeInTheDocument());
+  });
+
+  it('renders empty analytics and environment fallback states', async () => {
+    getMock.mockImplementation((path: string) => {
+      if (path === '/api/analysis/uploads') return Promise.resolve([]);
+      if (path === '/api/analysis/model-stats') {
+        return Promise.resolve({
+          model: { weights_file: 'w.pt', confidence_threshold: 0.5, image_size: 640 },
+          evaluation: { precision: null, recall: null, map50: null, map50_95: null, notes: '' },
+          production_observed: { total_uploads: 0, total_detections: 0, average_upload_confidence: 0 },
+        });
+      }
+      if (path.startsWith('/api/analytics/overview')) {
+        return Promise.resolve({
+          scope: 'all-fields',
+          selected_field_id: null,
+          selected_year: null,
+          available_years: [2026],
+          totals: { uploads: 0, detections: 0, avg_detection_per_upload: 0 },
+          daily: [],
+          by_field: [],
+          by_trap: [],
+        });
+      }
+      if (path.startsWith('/api/analytics/insights')) {
+        return Promise.resolve({
+          context: {
+            scope: 'all-fields',
+            dataset_version: 'metadata-v1.0.0',
+            model_version: 'model.pt',
+            filters: {
+              field_id: null,
+              trap_id: null,
+              trap_code: null,
+              start_date: null,
+              end_date: null,
+              min_detections: null,
+              max_detections: null,
+              min_confidence: null,
+            },
+          },
+          kpis: {
+            processed_images: 0,
+            total_detections: 0,
+            avg_detections_per_image: null,
+            highest_activity_field: null,
+            highest_activity_trap: null,
+          },
+          trend: [],
+          comparisons: { by_field: [], by_trap: [] },
+          results: [],
+        });
+      }
+      if (path.startsWith('/api/environment/overview')) {
+        return Promise.resolve({
+          selected_year: null,
+          available_years: [2026],
+          fields: [
+            {
+              field_id: 'field-empty',
+              field_name: 'Empty Field',
+              records: 0,
+              start_date: null,
+              end_date: null,
+              last_fetch_at: null,
+              latest: null,
+              sources: {},
+            },
+          ],
+        });
+      }
+      if (path === '/api/map/fields') return Promise.resolve([]);
+      if (path === '/api/map/fields/field-empty') {
+        return Promise.resolve({
+          id: 'field-empty',
+          name: 'Empty Field',
+          area_m2: 1000,
+          polygon: [],
+          traps: [],
+        });
+      }
+      return Promise.resolve({
+        field_id: '',
+        field_name: '',
+        weeks: 0,
+        selected_year: null,
+        all_data: true,
+        start_date: null,
+        end_date: null,
+        population_weekly: [],
+        weather_weekly: [],
+        trap_weekly: [],
+      });
+    });
+
+    render(<DashboardPage />);
+    fireEvent.click(screen.getByRole('button', { name: /Monitoring Analytics/i }));
+
+    await waitFor(() => expect(screen.getByText('No image-level results match the selected filters.')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('No weekly upload data in selected scope.')).toBeInTheDocument());
+  });
+
+  it('handles support errors and ignores blank questions', async () => {
+    postMock.mockRejectedValueOnce(new Error('Support failed'));
+
+    render(<DashboardPage />);
+    fireEvent.click(screen.getByRole('button', { name: /Support Chatbot/i }));
+    await waitFor(() => expect(screen.getByText('Navigation & Usage Help')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Ask Support' }));
+    expect(postMock).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByLabelText('Ask support'), { target: { value: 'Where is upload?' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Ask Support' }));
+    await waitFor(() => expect(screen.getByText('Support failed')).toBeInTheDocument());
   });
 });

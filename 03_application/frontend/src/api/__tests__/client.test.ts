@@ -77,6 +77,20 @@ describe('apiClient', () => {
     expect(headers.get('Content-Type')).toBeNull();
   });
 
+  it('downloads blob responses with binary accept header', async () => {
+    const blob = new Blob(['image-bytes'], { type: 'image/jpeg' });
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(blob, { status: 200 }));
+
+    const out = await apiClient.getBlob('/image.jpg', 'token-image');
+
+    expect(out).toBeInstanceOf(Blob);
+    expect(out.size).toBeGreaterThan(0);
+    const [, init] = fetchMock.mock.calls[0];
+    const headers = new Headers(init?.headers);
+    expect(headers.get('Authorization')).toBe('Bearer token-image');
+    expect(headers.get('Accept')).toBe('image/*, application/octet-stream');
+  });
+
   it('throws api message for non-ok response', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('bad request', { status: 400 }));
     await expect(apiClient.get('/bad')).rejects.toThrow('bad request');
@@ -92,6 +106,17 @@ describe('apiClient', () => {
 
     await expect(apiClient.get('/auth')).rejects.toThrow('Invalid credentials');
     await expect(apiClient.get('/boom')).rejects.toThrow('Server error. Try again later.');
+  });
+
+  it('falls back to raw text when json error payload is malformed', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response('{not-json', {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    );
+
+    await expect(apiClient.get('/malformed')).rejects.toThrow('{not-json');
   });
 
   it('throws reachability message on fetch error', async () => {

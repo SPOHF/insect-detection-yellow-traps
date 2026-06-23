@@ -42,12 +42,22 @@ vi.mock('react-leaflet', () => ({
     eventHandlers,
   }: {
     children: React.ReactNode;
-    eventHandlers?: { click?: () => void };
+    eventHandlers?: { click?: () => void; dragend?: (event: any) => void };
   }) => (
-    <button data-testid="marker" onClick={() => eventHandlers?.click?.()}>
-      marker
-      {children}
-    </button>
+    <span>
+      <button data-testid="marker" onClick={() => eventHandlers?.click?.()}>
+        marker
+        {children}
+      </button>
+      {eventHandlers?.dragend ? (
+        <button
+          data-testid="drag-marker"
+          onClick={() => eventHandlers.dragend?.({ target: { getLatLng: () => ({ lat: 53, lng: 6 }) } })}
+        >
+          drag marker
+        </button>
+      ) : null}
+    </span>
   ),
   Polygon: () => <div>polygon</div>,
   Polyline: () => <div>polyline</div>,
@@ -175,6 +185,96 @@ describe('FieldMapManager', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Save Field' }));
     await waitFor(() => expect(postMock).toHaveBeenCalledWith('/api/map/fields', expect.any(Object), 'token'));
+  });
+
+  it('supports draft undo, redo, clear, and marker drag handlers', async () => {
+    setupGetMock();
+    const onTrapSelect = vi.fn();
+
+    render(<FieldMapManager token="token" selectedTrapId="" uploadOnly={false} onTrapSelect={onTrapSelect} />);
+    await waitFor(() => expect(getMock).toHaveBeenCalledWith('/api/map/fields', 'token'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'New Field Draft' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Draw Field' }));
+    await act(async () => {
+      mapClickHandler?.({ latlng: { lat: 52.2, lng: 5.2 } });
+      mapClickHandler?.({ latlng: { lat: 52.21, lng: 5.2 } });
+      mapClickHandler?.({ latlng: { lat: 52.22, lng: 5.2 } });
+    });
+    expect(screen.getByText('3')).toBeInTheDocument();
+
+    fireEvent.click(screen.getAllByTestId('drag-marker')[0]);
+    fireEvent.click(screen.getByRole('button', { name: 'Undo Corner' }));
+    expect(screen.getByText('2')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Redo Corner' }));
+    expect(screen.getByText('3')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Place Traps' }));
+    await act(async () => {
+      mapClickHandler?.({ latlng: { lat: 52.205, lng: 5.205 } });
+      mapClickHandler?.({ latlng: { lat: 52.206, lng: 5.206 } });
+    });
+    expect(screen.getAllByText(/Draft trap #/)).toHaveLength(2);
+    fireEvent.click(screen.getAllByTestId('drag-marker').at(-1)!);
+    fireEvent.click(screen.getByRole('button', { name: 'Undo Trap' }));
+    expect(screen.getAllByText(/Draft trap #/)).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Redo Trap' }));
+    expect(screen.getAllByText(/Draft trap #/)).toHaveLength(2);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Clear Draft' }));
+    expect(screen.queryByText(/Draft trap #/)).not.toBeInTheDocument();
+    expect(onTrapSelect).toHaveBeenCalledWith(null, null);
+  });
+
+  it('surfaces field save and selected field loading errors', async () => {
+    setupGetMock();
+    postMock.mockRejectedValueOnce(new Error('Field save failed'));
+
+    render(<FieldMapManager token="token" selectedTrapId="" uploadOnly={false} onTrapSelect={vi.fn()} />);
+    await waitFor(() => expect(getMock).toHaveBeenCalledWith('/api/map/fields', 'token'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'New Field Draft' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Draw Field' }));
+    await act(async () => {
+      mapClickHandler?.({ latlng: { lat: 52.2, lng: 5.2 } });
+      mapClickHandler?.({ latlng: { lat: 52.21, lng: 5.2 } });
+      mapClickHandler?.({ latlng: { lat: 52.22, lng: 5.2 } });
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save Field' }));
+    await waitFor(() => expect(screen.getByText('Field name is required.')).toBeInTheDocument());
+
+    fireEvent.change(screen.getByPlaceholderText('New field name'), { target: { value: 'North Field' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save Field' }));
+    await waitFor(() => expect(screen.getByText('Field save failed')).toBeInTheDocument());
+
+    getMock.mockImplementation((path: string) => {
+      if (path === '/api/map/fields') {
+        return Promise.resolve([{ id: 'field-1', name: 'Field A', area_m2: 1000, trap_count: 1 }]);
+      }
+      if (path === '/api/map/fields/field-1') return Promise.reject(new Error('No field'));
+      return Promise.resolve([]);
+    });
+    render(<FieldMapManager token="token" selectedTrapId="" uploadOnly={true} onTrapSelect={vi.fn()} />);
+    await waitFor(() => expect(screen.getByText('Failed to load selected field')).toBeInTheDocument());
+  });
+
+  it('validates and reports trap rename errors', async () => {
+    setupGetMock();
+    patchMock.mockRejectedValueOnce(new Error('Rename failed'));
+    const onTrapSelect = vi.fn();
+
+    render(<FieldMapManager token="token" selectedTrapId="trap-1" uploadOnly={false} onTrapSelect={onTrapSelect} />);
+    await waitFor(() => expect(getMock).toHaveBeenCalledWith('/api/map/fields/field-1', 'token'));
+
+    const renameInput = screen.getByLabelText('Rename trap');
+    fireEvent.change(renameInput, { target: { value: '   ' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save Trap Name' }));
+    await waitFor(() => expect(screen.getByText('Trap name cannot be empty.')).toBeInTheDocument());
+
+    fireEvent.change(renameInput, { target: { value: 'Renamed Trap' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save Trap Name' }));
+    await waitFor(() => expect(screen.getByText('Rename failed')).toBeInTheDocument());
   });
 
   it('supports trap renaming and handles trap add error on active fields', async () => {
