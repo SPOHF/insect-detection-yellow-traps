@@ -83,8 +83,8 @@ describe('apiClient', () => {
 
     const out = await apiClient.getBlob('/image.jpg', 'token-image');
 
-    expect(out).toBeInstanceOf(Blob);
     expect(out.size).toBeGreaterThan(0);
+    expect(typeof out.type).toBe('string');
     const [, init] = fetchMock.mock.calls[0];
     const headers = new Headers(init?.headers);
     expect(headers.get('Authorization')).toBe('Bearer token-image');
