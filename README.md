@@ -1,40 +1,46 @@
 # SWD Insect Monitoring Platform
 
-End-to-end local platform for monitoring *Drosophila suzukii* on yellow sticky traps.
-
-This repo is now kept intentionally simple:
-- `03_application/` is the product code you run.
-- `04_ml_insect_detection_model/` stores model weight files only.
-- `develop` is the active integration branch before promotion to `main`.
+End-to-end platform for monitoring *Drosophila suzukii* on yellow sticky traps. The product app combines a FastAPI backend, React/Vite frontend, Postgres, Neo4j, and a YOLO model artifact for trap-image inference.
 
 ## Repository Layout
 
-This repository is organized into four top-level folders:
+- `01_project_docs_notes/` - project notes, standards, and supporting documentation
+- `02_pm_analytics_dashboard/` - internal Streamlit project-management and quality dashboard
+- `03_application/` - runnable product app
+- `03_application/backend/` - FastAPI API, auth, uploads, analytics, inference integration
+- `03_application/frontend/` - React/Vite user interface
+- `03_application/poc-model/` - model files consumed by the backend at runtime
+- `04_ml_insect_detection_model/` - ML experiment/config/test code and model-development assets
 
-- `01_project_docs_notes/` -> documentation and notes
-- `02_pm_analytics_dashboard/` -> internal Streamlit PM dashboard
-- `03_application/` -> production app (backend, frontend, runtime model, compose files)
-- `04_ml_insect_detection_model/` -> model weight files only
+`develop` is the active integration branch before promotion to `main`.
 
-## Quickstart: run the application locally
+## Prerequisites
 
-This is the fastest path to run the full monitoring app on your machine. Run the commands from the repository root unless a step says otherwise.
+Install these before starting:
 
-### 1) Install prerequisites
-
-- Docker Desktop (or Docker Engine + Compose)
+- Docker Desktop, or Docker Engine with Docker Compose
 - Python `3.11+`
-- Node.js `18+` (recommended `20+`)
+- Node.js `20+`
 - npm
+- Git
 
-### 2) Create the backend environment file
+Optional:
+
+- OpenAI API key, only if you want OpenAI-backed narrative analysis features
+- GitHub personal access token, only if you run the PM analytics dashboard
+
+## Fastest Local Setup
+
+Run these commands from the repository root unless a step says otherwise.
+
+### 1) Configure Backend
 
 ```bash
 cd 03_application/backend
 cp .env.example .env
 ```
 
-Edit `03_application/backend/.env` and make sure it contains these values for local development:
+Edit `03_application/backend/.env` and keep these local-development values aligned with `03_application/docker-compose.yml`:
 
 ```env
 APP_NAME=SWD Monitoring API
@@ -53,10 +59,14 @@ MODEL_WEIGHTS_PATH=../poc-model/swd_yolo_best.pt
 MODEL_METRICS_PATH=../poc-model/model_metrics.json
 MODEL_CONFIDENCE=0.25
 MODEL_IMAGE_SIZE=640
+MODEL_DEVICE=auto
+MODEL_MPS_HIGH_WATERMARK_RATIO=0.7
+
 OPENAI_API_KEY=
 OPENAI_CHAT_MODEL=gpt-4.1-mini
 
 UPLOAD_DIR=storage/uploads
+UPLOAD_STORAGE_BACKEND=local
 CORS_ORIGINS=http://localhost:5173
 
 ADMIN_EMAIL=admin@swd-monitoring.com
@@ -64,60 +74,63 @@ ADMIN_PASSWORD=Admin123ChangeMe
 ADMIN_NAME=Local Admin
 ```
 
-Notes:
+Important:
 
-- `SECRET_KEY` is required and must be at least 32 characters.
-- `POSTGRES_URL`, `NEO4J_URI`, `NEO4J_USER`, and `NEO4J_PASSWORD` must match `03_application/docker-compose.yml` when you run the local database containers.
-- `MODEL_WEIGHTS_PATH` must point to an existing model file. The repo includes `03_application/poc-model/swd_yolo_best.pt`.
-- `MODEL_METRICS_PATH` must point to `03_application/poc-model/model_metrics.json`.
-- `OPENAI_API_KEY` can stay empty unless you are using OpenAI-backed features.
-- For staging or production, change `SECRET_KEY`, change `ADMIN_PASSWORD`, set `APP_ENV` to `staging` or `production`, and use explicit `CORS_ORIGINS`. Do not use the local defaults outside development.
+- `SECRET_KEY` must be at least 32 characters.
+- `ADMIN_PASSWORD=Admin123ChangeMe` is accepted only for local development.
+- `MODEL_WEIGHTS_PATH` must point to an existing model file. The expected local file is `03_application/poc-model/swd_yolo_best.pt`.
+- `MODEL_METRICS_PATH` should point to `03_application/poc-model/model_metrics.json`.
+- Keep `API_HOST=127.0.0.1` for local development unless you intentionally need LAN access.
 
-### 3) Create the frontend environment file
+### 2) Configure Frontend
 
 ```bash
-cd 03_application/frontend
+cd ../frontend
 cp .env.example .env
 ```
 
-For local development, `03_application/frontend/.env` should contain:
+`03_application/frontend/.env` should contain:
 
 ```env
 VITE_API_BASE=http://localhost:8000
 ```
 
-### 4) Start Postgres and Neo4j
+### 3) Start Databases
 
 ```bash
-cd 03_application
+cd ..
 docker compose -f docker-compose.yml up -d postgres neo4j
 ```
 
 This starts:
 
-- Postgres on `localhost:5432`
-- Neo4j browser on `http://localhost:7474`
-- Neo4j Bolt on `localhost:7687`
+- Postgres: `localhost:5432`
+- Neo4j browser: `http://localhost:7474`
+- Neo4j Bolt: `localhost:7687`
 
-### 5) Start the backend API
+### 4) Start Backend API
 
 ```bash
-cd 03_application/backend
+cd backend
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ./scripts/start.sh
 ```
 
-Backend URL: `http://localhost:8000`
-Docs: `http://localhost:8000/docs`
+Backend URLs:
 
-On startup, the backend creates the local admin user if it does not exist:
+- API: `http://localhost:8000`
+- API docs: `http://localhost:8000/docs`
+
+On startup, the backend creates the local admin user if missing:
 
 - Email: `admin@swd-monitoring.com`
 - Password: `Admin123ChangeMe`
 
-### 6) Start the frontend
+### 5) Start Frontend
+
+Open a second terminal:
 
 ```bash
 cd 03_application/frontend
@@ -125,13 +138,15 @@ npm install
 npm run dev
 ```
 
-Frontend URL: `http://localhost:5173`
+Frontend URL:
 
-Log in with the admin credentials above.
+- `http://localhost:5173`
 
-## Run the whole app with Docker
+Log in with the local admin credentials from the backend section.
 
-You can also run the backend and frontend in containers.
+## Full Docker Setup
+
+Use this if you want backend and frontend in containers as well as Postgres and Neo4j.
 
 ```bash
 cd 03_application
@@ -140,7 +155,7 @@ cp frontend/.env.example frontend/.env
 docker compose -f docker-compose.yml -f docker-compose.app.yml up --build
 ```
 
-When using `docker-compose.app.yml`, the backend service overrides these values for container networking:
+The app compose file intentionally overrides container-only values:
 
 ```env
 POSTGRES_URL=postgresql+psycopg2://swd_user:swd_pass@postgres:5432/swd_monitoring
@@ -150,28 +165,100 @@ MODEL_METRICS_PATH=/models/model_metrics.json
 CORS_ORIGINS=http://localhost:5173
 ```
 
-URLs are the same:
+Docker URLs:
 
 - Frontend: `http://localhost:5173`
 - Backend: `http://localhost:8000`
 - API docs: `http://localhost:8000/docs`
 - Neo4j browser: `http://localhost:7474`
 
-## Stop local services
+## Stop Local Services
+
+Database-only setup:
 
 ```bash
 cd 03_application
 docker compose -f docker-compose.yml down
 ```
 
-If you started the full Docker app, stop it with:
+Full Docker app:
 
 ```bash
 cd 03_application
 docker compose -f docker-compose.yml -f docker-compose.app.yml down
 ```
 
-## PM analytics dashboard
+To remove database volumes as well:
+
+```bash
+cd 03_application
+docker compose -f docker-compose.yml -f docker-compose.app.yml down -v
+```
+
+## Production / Staging Checklist
+
+Before deploying outside local development:
+
+- Set `APP_ENV=staging` or `APP_ENV=production`.
+- Use a new random `SECRET_KEY` of at least 32 characters.
+- Change `ADMIN_PASSWORD`; the local default is rejected outside development.
+- Set explicit frontend origins in `CORS_ORIGINS`; do not use `*`.
+- Keep Postgres and Neo4j private; do not expose database ports publicly.
+- Serve the frontend and backend over HTTPS.
+- Keep `.env` files and tokens out of Git.
+- Set `OPENAI_API_KEY` only in secret storage if OpenAI-backed features are enabled.
+- Use `UPLOAD_STORAGE_BACKEND=azure` only with a valid `AZURE_STORAGE_CONNECTION_STRING` and `AZURE_STORAGE_CONTAINER`.
+
+## Validation Commands
+
+Run these before a release or after dependency changes.
+
+Backend tests:
+
+```bash
+cd 03_application/backend
+source .venv/bin/activate
+python -m pytest -q ../tests/backend
+```
+
+ML tests:
+
+```bash
+PYTHONPATH=04_ml_insect_detection_model/src 03_application/backend/.venv/bin/python -m pytest -q 04_ml_insect_detection_model/tests
+```
+
+Frontend tests and build:
+
+```bash
+cd 03_application/frontend
+npm test
+npm run build
+```
+
+Frontend coverage:
+
+```bash
+cd 03_application/frontend
+npm test -- --coverage
+```
+
+Security checks:
+
+```bash
+cd 03_application/frontend
+npm audit --audit-level=low
+
+cd ../..
+03_application/backend/.venv/bin/python -m pip_audit -r 03_application/backend/requirements.txt
+03_application/backend/.venv/bin/python -m pip_audit -r requirements.txt
+03_application/backend/.venv/bin/python -m pip_audit -r 02_pm_analytics_dashboard/requirements.txt
+03_application/backend/.venv/bin/python -m bandit -q -r 03_application/backend/app -f txt
+03_application/backend/.venv/bin/python -m bandit -q -r scripts 02_pm_analytics_dashboard 04_ml_insect_detection_model/src -f txt
+```
+
+## PM Analytics Dashboard
+
+The PM dashboard is separate from the product app. It reads GitHub metadata and displays project, quality, deployment, and architecture views.
 
 Create its environment file:
 
@@ -182,14 +269,14 @@ cp 02_pm_analytics_dashboard/.env.example 02_pm_analytics_dashboard/.env
 Set these values in `02_pm_analytics_dashboard/.env`:
 
 ```env
-GITHUB_TOKEN=your_github_pat_here
-GITHUB_OWNER=your_org_or_user
-GITHUB_REPO=your_repo_name
+GITHUB_TOKEN=your_read_only_github_pat_here
+GITHUB_OWNER=SPOHF
+GITHUB_REPO=insect-detection-yellow-traps
 DASHBOARD_PASSKEY=change_this_to_a_strong_passkey
 SHOW_INTERNAL_ERRORS=false
 ```
 
-Then run it:
+Run it:
 
 ```bash
 python3 -m venv .venv
@@ -198,7 +285,48 @@ pip install -r 02_pm_analytics_dashboard/requirements.txt
 streamlit run 02_pm_analytics_dashboard/app.py
 ```
 
-## Additional docs
+Streamlit URL:
 
+- `http://localhost:8501`
+
+Security notes:
+
+- Use a fine-grained, read-only GitHub token.
+- Do not commit `02_pm_analytics_dashboard/.env`.
+- Keep `SHOW_INTERNAL_ERRORS=false` outside local debugging.
+
+## ML Component
+
+The active application consumes model artifacts from `03_application/poc-model/`. The ML source and tests live in `04_ml_insect_detection_model/`.
+
+Run ML tests:
+
+```bash
+PYTHONPATH=04_ml_insect_detection_model/src 03_application/backend/.venv/bin/python -m pytest -q 04_ml_insect_detection_model/tests
+```
+
+Relevant ML folders:
+
+- `04_ml_insect_detection_model/configs/` - training, evaluation, and inference configs
+- `04_ml_insect_detection_model/src/yolo2026_seg/` - ML pipeline code
+- `04_ml_insect_detection_model/tests/` - ML unit tests
+- `04_ml_insect_detection_model/weights/` - model checkpoints
+
+## Troubleshooting
+
+- `zsh: permission denied: path/to/test.py`: run tests with `pytest`, not by executing the file directly.
+- Backend cannot connect to Postgres: confirm `docker compose -f 03_application/docker-compose.yml ps` shows Postgres running and `POSTGRES_URL` uses `localhost` for local non-container backend.
+- Backend cannot connect to Neo4j: confirm Neo4j is running and `NEO4J_URI=bolt://localhost:7687` for local non-container backend.
+- Frontend API calls fail: confirm backend is running on `http://localhost:8000` and frontend `.env` has `VITE_API_BASE=http://localhost:8000`.
+- Upload or inference fails: confirm `MODEL_WEIGHTS_PATH` exists and `UPLOAD_DIR` is writable.
+- Docker app backend cannot reach databases: use both compose files together, because `docker-compose.app.yml` depends on services from `docker-compose.yml`.
+
+## Additional Documentation
+
+- `03_application/README.md`
+- `03_application/backend/README.md`
+- `03_application/frontend/README.md`
+- `02_pm_analytics_dashboard/README.md`
+- `04_ml_insect_detection_model/README.md`
 - `REPO_STRUCTURE.md`
-- `01_project_docs_notes/docs/standards/`
+- `SECURITY.md`
