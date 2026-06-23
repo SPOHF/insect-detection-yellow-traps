@@ -22,7 +22,6 @@ import type {
   ModelStats,
   SupportChatResponse,
   TrapPoint,
-  UploadBatchResponse,
   UploadDetail,
   UploadSummary,
 } from '../types/api';
@@ -248,7 +247,6 @@ export default function DashboardPage() {
 
   const [section, setSection] = useState<SectionKey>('home');
   const [uploads, setUploads] = useState<UploadSummary[]>([]);
-  const [lastBatch, setLastBatch] = useState<UploadBatchResponse | null>(null);
   const [analytics, setAnalytics] = useState<AnalyticsOverview | null>(null);
   const [insights, setInsights] = useState<InsightDashboard | null>(null);
   const [insightDetail, setInsightDetail] = useState<UploadDetail | null>(null);
@@ -601,8 +599,7 @@ export default function DashboardPage() {
       }
       selectedFiles.forEach((file) => formData.append('images', file));
 
-      const response = await apiClient.postForm<UploadBatchResponse>('/api/analysis/upload-range', formData, token);
-      setLastBatch(response);
+      await apiClient.postForm('/api/analysis/upload-range', formData, token);
       await loadUploads();
       if (section === 'analytics') {
         await loadAnalytics();

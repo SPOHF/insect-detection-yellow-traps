@@ -9,7 +9,8 @@ Authorship: Louis Ferger-Andrews (@LouisFerger-Andrews)
 import os
 import json
 import re
-import subprocess
+# Dashboard runs fixed local maintenance commands, not shell input.
+import subprocess  # nosec B404
 import sys
 import hmac
 from datetime import date, datetime, timedelta
@@ -85,7 +86,7 @@ def _get_config(name: str, default: str = "") -> str:
             return str(st.secrets[name])
     except Exception:
         # st.secrets may be unavailable depending on runtime; fall back to environment variables.
-        pass
+        return str(os.getenv(name, default))
     return str(os.getenv(name, default))
 
 
@@ -1057,7 +1058,8 @@ DEPLOYMENT_HISTORY_PATH = os.path.join(ROOT_DIR, "deployment_history.json")
 
 def _run_check(cmd: list[str], cwd: str) -> dict:
     try:
-        result = subprocess.run(
+        # Command list is constructed by trusted dashboard code.
+        result = subprocess.run(  # nosec B603
             cmd,
             cwd=cwd,
             capture_output=True,
@@ -1083,7 +1085,8 @@ def _run_check(cmd: list[str], cwd: str) -> dict:
 
 
 def _python_has_module(python_bin: str, module_name: str, cwd: str) -> bool:
-    check = subprocess.run(
+    # Module check runs a fixed interpreter command.
+    check = subprocess.run(  # nosec B603
         [python_bin, "-c", f"import {module_name}"],
         cwd=cwd,
         capture_output=True,

@@ -30,7 +30,8 @@ def get_current_user(db: Session = Depends(get_db), token: str = Depends(oauth2_
         payload = jwt.decode(token, settings.secret_key, algorithms=[ALGORITHM])
         user_id = payload.get('sub')
         token_type = payload.get('type')
-        if user_id is None or token_type != 'access':
+        # JWT token type marker, not a password.
+        if user_id is None or token_type != 'access':  # nosec B105
             raise credentials_exception
         try:
             user_id_int = int(user_id)
