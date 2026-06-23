@@ -40,7 +40,7 @@ def run_inference(cfg: InferConfig) -> Path:
 
     results = model.predict(
         source=str(cfg.source),
-        task="segment",
+        task=cfg.task,
         imgsz=cfg.imgsz,
         conf=cfg.conf,
         iou=cfg.iou,

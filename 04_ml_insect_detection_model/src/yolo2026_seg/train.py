@@ -13,14 +13,16 @@ from .utils import dump_json, ensure_dir, set_seed, to_float
 
 def _extract_metrics(results: Any) -> dict[str, float]:
     metrics = getattr(results, "results_dict", {}) or {}
-    return {
+    out = {
         "map50": to_float(metrics.get("metrics/mAP50(B)")),
         "map50_95": to_float(metrics.get("metrics/mAP50-95(B)")),
         "precision": to_float(metrics.get("metrics/precision(B)")),
         "recall": to_float(metrics.get("metrics/recall(B)")),
-        "seg_map50": to_float(metrics.get("metrics/mAP50(M)")),
-        "seg_map50_95": to_float(metrics.get("metrics/mAP50-95(M)")),
     }
+    if "metrics/mAP50(M)" in metrics or "metrics/mAP50-95(M)" in metrics:
+        out["seg_map50"] = to_float(metrics.get("metrics/mAP50(M)"))
+        out["seg_map50_95"] = to_float(metrics.get("metrics/mAP50-95(M)"))
+    return out
 
 
 def run_training(cfg: TrainConfig) -> dict[str, Any]:
@@ -50,7 +52,7 @@ def run_training(cfg: TrainConfig) -> dict[str, Any]:
         model = build_model(cfg.model)
         model.train(
             data=str(fold_data_yaml),
-            task="segment",
+            task=cfg.task,
             imgsz=cfg.imgsz,
             epochs=cfg.epochs,
             batch=cfg.batch,
@@ -58,6 +60,10 @@ def run_training(cfg: TrainConfig) -> dict[str, Any]:
             device=cfg.device or None,
             workers=cfg.workers,
             patience=cfg.patience,
+            optimizer=cfg.optimizer,
+            cos_lr=cfg.cos_lr,
+            close_mosaic=cfg.close_mosaic,
+            single_cls=cfg.single_cls,
             project=str(cfg.project),
             name=fold_run_name,
             exist_ok=True,
@@ -68,7 +74,7 @@ def run_training(cfg: TrainConfig) -> dict[str, Any]:
 
         fold_dir = cfg.project / fold_run_name
         val_model = build_model(str(fold_dir / "weights" / "best.pt"))
-        val_results = val_model.val(data=str(fold_data_yaml), task="segment", device=cfg.device or None)
+        val_results = val_model.val(data=str(fold_data_yaml), task=cfg.task, device=cfg.device or None)
         fm = _extract_metrics(val_results)
         fold_metrics.append(fm)
 

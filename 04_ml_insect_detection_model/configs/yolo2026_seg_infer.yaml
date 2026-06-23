@@ -1,15 +1,15 @@
-# Input
+# Legacy segmentation inference config.
+# The production app currently consumes bounding boxes, so prefer swd_yolo_detect_infer.yaml.
 model_path: 04_ml_insect_detection_model/weights/yolo2026_seg_best.pt
+task: segment
 inputs:
   source_dir: data/infer/images
 
-# Process
 img_size: 1024
 confidence_threshold: 0.25
 iou_threshold: 0.50
 max_detections: 300
 
-# Output
 outputs:
   save_visualizations: true
   output_dir: runs/infer
