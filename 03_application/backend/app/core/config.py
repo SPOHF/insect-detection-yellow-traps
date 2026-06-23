@@ -12,7 +12,8 @@ from typing import List
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-DEFAULT_ADMIN_PASSWORD = 'Admin123!ChangeMe'
+# Local-dev only; rejected for staging/production.
+DEFAULT_ADMIN_PASSWORD = 'Admin123!ChangeMe'  # nosec B105
 PRODUCTION_ENVS = {'prod', 'production', 'staging'}
 
 
@@ -21,7 +22,7 @@ class Settings(BaseSettings):
 
     app_name: str = Field(default='SWD Monitoring API', alias='APP_NAME')
     app_env: str = Field(default='development', alias='APP_ENV')
-    api_host: str = Field(default='0.0.0.0', alias='API_HOST')
+    api_host: str = Field(default='127.0.0.1', alias='API_HOST')
     api_port: int = Field(default=8000, alias='API_PORT')
 
     secret_key: str = Field(alias='SECRET_KEY', min_length=32)

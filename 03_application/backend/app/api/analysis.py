@@ -995,9 +995,12 @@ def _bar_chart_svg(title: str, labels: list[str], values: list[float], y_label: 
 def _yearly_week_comparison_svg(title: str, rows: list[dict]) -> str:
     by_year: dict[int, dict[int, float]] = defaultdict(dict)
     for row in rows:
+        parsed = None
         try:
             parsed = date.fromisoformat(str(row['week_start']))
-        except Exception:
+        except (TypeError, ValueError):
+            pass
+        if parsed is None:
             continue
         iso_week = int(parsed.isocalendar().week)
         by_year[int(parsed.year)][iso_week] = float(row['avg_population'])

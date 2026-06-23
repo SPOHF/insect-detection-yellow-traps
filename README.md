@@ -39,7 +39,7 @@ Edit `03_application/backend/.env` and make sure it contains these values for lo
 ```env
 APP_NAME=SWD Monitoring API
 APP_ENV=development
-API_HOST=0.0.0.0
+API_HOST=127.0.0.1
 API_PORT=8000
 SECRET_KEY=replace-with-a-long-random-secret-value-at-least-32-chars
 ACCESS_TOKEN_EXPIRE_MINUTES=120

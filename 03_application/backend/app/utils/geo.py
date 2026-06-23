@@ -9,7 +9,7 @@ Authorship: Louis Ferger-Andrews (@LouisFerger-Andrews)
 from __future__ import annotations
 
 from math import atan2, cos, log, pi, sin
-from typing import Iterable, List, Tuple
+from typing import Iterable, List
 
 
 def latlng_to_web_mercator(lat: float, lng: float) -> tuple[float, float]:

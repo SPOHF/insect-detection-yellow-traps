@@ -78,7 +78,8 @@ def build_group_folds(samples: list[Sample], folds: int, seed: int) -> list[dict
         groups.setdefault(s.group, []).append(s)
 
     group_ids = list(groups)
-    rnd = random.Random(seed)
+    # Deterministic data split, not cryptographic randomness.
+    rnd = random.Random(seed)  # nosec B311
     rnd.shuffle(group_ids)
 
     buckets: list[list[str]] = [[] for _ in range(folds)]
